@@ -23,7 +23,7 @@ class DatabaseManager:
         self.port = os.getenv('DB_PORT', '3306')
         self.database = os.getenv('DB_NAME', 'freedb_CreditRiskDB')
         self.username = os.getenv('DB_USER', 'freedb_user_credit')
-        self.password = os.getenv('DB_PASSWORD', '?z2ESa6nA@PJvY5')
+        self.password = os.getenv('DB_PASSWORD', 'w%%u6AW5EPy3rc6')
         self.engine = None
         self.connection = None
         self._init_engine()
