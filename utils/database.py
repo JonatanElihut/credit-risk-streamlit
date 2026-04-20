@@ -19,11 +19,11 @@ class DatabaseManager:
     """Gestor de base de datos MySQL - VERSIÓN CORREGIDA"""
 
     def __init__(self):
-        self.host = os.getenv('DB_HOST', 'sql.freedb.tech')
+        self.host = os.getenv('DB_HOST', 'br5itqfacogjlrr45495-mysql.services.clever-cloud.com')
         self.port = os.getenv('DB_PORT', '3306')
-        self.database = os.getenv('DB_NAME', 'freedb_CreditRiskDB')
-        self.username = os.getenv('DB_USER', 'freedb_user_credit')
-        self.password = os.getenv('DB_PASSWORD', 'w%%u6AW5EPy3rc6')
+        self.database = os.getenv('DB_NAME', 'br5itqfacogjlrr45495')
+        self.username = os.getenv('DB_USER', 'uupkorupcllhztvz')
+        self.password = os.getenv('DB_PASSWORD', 'bGwQ9SY7TkItaGWYSdIi')
         self.engine = None
         self.connection = None
         self._init_engine()
