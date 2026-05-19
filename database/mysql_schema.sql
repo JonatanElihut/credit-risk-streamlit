@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     dti DOUBLE,
     annual_inc DOUBLE,
     bc_util DOUBLE,
+    loan_amount DOUBLE,
+    loan_term INT,
 
     -- Resultados
     risk_probability DOUBLE NOT NULL,
