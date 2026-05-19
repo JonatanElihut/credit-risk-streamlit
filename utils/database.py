@@ -9,21 +9,21 @@ import numpy as np
 from dotenv import load_dotenv
 import streamlit as st
 from sqlalchemy import create_engine, text, exc
-from urllib.parse import quote_plus
+import mysql.connector
 
 # Cargar variables de entorno
 load_dotenv()
 
 
 class DatabaseManager:
-    """Gestor de base de datos MySQL - VERSIÓN CORREGIDA"""
+    """Gestor de base de datos MySQL - VERSIÓN ACTUALIZADA"""
 
     def __init__(self):
-        self.host = os.getenv('DB_HOST', 'br5itqfacogjlrr45495-mysql.services.clever-cloud.com')
+        self.host = os.getenv('DB_HOST', 'localhost')
         self.port = os.getenv('DB_PORT', '3306')
-        self.database = os.getenv('DB_NAME', 'br5itqfacogjlrr45495')
-        self.username = os.getenv('DB_USER', 'uupkorupcllhztvz')
-        self.password = os.getenv('DB_PASSWORD', 'bGwQ9SY7TkItaGWYSdIi')
+        self.database = os.getenv('DB_NAME', 'CreditRiskDB')
+        self.username = os.getenv('DB_USER', 'root')
+        self.password = os.getenv('DB_PASSWORD', '')
         self.engine = None
         self.connection = None
         self._init_engine()
@@ -31,21 +31,14 @@ class DatabaseManager:
     def _init_engine(self):
         """Inicializar motor de SQLAlchemy para MySQL"""
         try:
-            # Codificar la contraseña para URL
-            encoded_password = quote_plus(self.password)
-
             # Crear string de conexión para MySQL
-            connection_string = f"mysql+mysqlconnector://{self.username}:{encoded_password}@{self.host}:{self.port}/{self.database}"
+            connection_string = f"mysql+mysqlconnector://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
 
             self.engine = create_engine(
                 connection_string,
                 echo=False,
                 pool_pre_ping=True,
-                pool_recycle=3600,
-                connect_args={
-                    'connect_timeout': 10,
-                    'charset': 'utf8mb4'
-                }
+                pool_recycle=3600
             )
 
             # Probar conexión
@@ -56,8 +49,6 @@ class DatabaseManager:
             return True
         except exc.SQLAlchemyError as e:
             st.error(f"❌ Error al inicializar motor MySQL: {str(e)}")
-            import traceback
-            traceback.print_exc()
             self.engine = None
             return False
 
@@ -138,7 +129,7 @@ class DatabaseManager:
         return None
 
     def save_prediction(self, user_id, input_data, results):
-        """Guardar predicción en la base de datos - VERSIÓN MySQL"""
+        """Guardar predicción en la base de datos - CON loan_amount y loan_term"""
         if not self.engine:
             st.error("❌ Motor de base de datos no disponible")
             return None
@@ -147,27 +138,33 @@ class DatabaseManager:
             user_id = self.convert_numpy_types(user_id)
             details_json = json.dumps(results.get('details', {}))
 
+            # Importar st aquí para acceder a session_state (evitar import circular)
+            import streamlit as st
+
+            loan_amount = float(st.session_state.get('loan_amount', 0))
+            loan_term = int(st.session_state.get('loan_term', 12))
+
             with self.engine.connect() as conn:
                 stmt = text("""
-                            INSERT INTO predictions (user_id, out_prncp, out_prncp_inv, last_pymnt_amnt,
-                                                     total_rec_prncp, recoveries, collection_recovery_fee,
-                                                     total_pymnt, installment, funded_amnt_inv,
-                                                     total_pymnt_inv, total_rec_int, hardship_payoff_balance_amount,
-                                                     orig_projected_additional_accrued_interest, int_rate,
-                                                     hardship_amount, total_rec_late_fee, hardship_last_payment_amount,
-                                                     dti, annual_inc, bc_util, risk_probability,
-                                                     decision, risk_level, threshold_used, model_used,
-                                                     profile_score, details_json, created_at)
-                            VALUES (:user_id, :out_prncp, :out_prncp_inv, :last_pymnt_amnt,
-                                    :total_rec_prncp, :recoveries, :collection_recovery_fee,
-                                    :total_pymnt, :installment, :funded_amnt_inv,
-                                    :total_pymnt_inv, :total_rec_int, :hardship_payoff_balance_amount,
-                                    :orig_projected_additional_accrued_interest, :int_rate,
-                                    :hardship_amount, :total_rec_late_fee, :hardship_last_payment_amount,
-                                    :dti, :annual_inc, :bc_util, :risk_probability,
-                                    :decision, :risk_level, :threshold_used, :model_used,
-                                    :profile_score, :details_json, NOW())
-                            """)
+                    INSERT INTO predictions (user_id, out_prncp, out_prncp_inv, last_pymnt_amnt,
+                                             total_rec_prncp, recoveries, collection_recovery_fee,
+                                             total_pymnt, installment, funded_amnt_inv,
+                                             total_pymnt_inv, total_rec_int, hardship_payoff_balance_amount,
+                                             orig_projected_additional_accrued_interest, int_rate,
+                                             hardship_amount, total_rec_late_fee, hardship_last_payment_amount,
+                                             dti, annual_inc, bc_util, loan_amount, loan_term,
+                                             risk_probability, decision, risk_level, threshold_used, 
+                                             model_used, profile_score, details_json, created_at)
+                    VALUES (:user_id, :out_prncp, :out_prncp_inv, :last_pymnt_amnt,
+                            :total_rec_prncp, :recoveries, :collection_recovery_fee,
+                            :total_pymnt, :installment, :funded_amnt_inv,
+                            :total_pymnt_inv, :total_rec_int, :hardship_payoff_balance_amount,
+                            :orig_projected_additional_accrued_interest, :int_rate,
+                            :hardship_amount, :total_rec_late_fee, :hardship_last_payment_amount,
+                            :dti, :annual_inc, :bc_util, :loan_amount, :loan_term,
+                            :risk_probability, :decision, :risk_level, :threshold_used, 
+                            :model_used, :profile_score, :details_json, NOW())
+                """)
 
                 params = {
                     'user_id': user_id,
@@ -192,6 +189,8 @@ class DatabaseManager:
                     'dti': float(input_data.get('dti', 0)),
                     'annual_inc': float(input_data.get('annual_inc', 0)),
                     'bc_util': float(input_data.get('bc_util', 0)),
+                    'loan_amount': loan_amount,
+                    'loan_term': loan_term,
                     'risk_probability': float(results.get('probability', 0)),
                     'decision': str(results.get('decision', '')),
                     'risk_level': str(results.get('risk_level', '')),
@@ -204,13 +203,13 @@ class DatabaseManager:
                 conn.execute(stmt, params)
                 conn.commit()
 
-                # Obtener último ID insertado (MySQL)
+                # Obtener último ID insertado
                 result = conn.execute(text("SELECT LAST_INSERT_ID() as last_id"))
                 prediction_id = result.scalar()
 
                 return int(prediction_id) if prediction_id else None
 
-        except exc.SQLAlchemyError as e:
+        except Exception as e:
             st.error(f"❌ Error al guardar predicción: {str(e)}")
             import traceback
             traceback.print_exc()
@@ -235,7 +234,9 @@ class DatabaseManager:
                            profile_score, \
                            out_prncp, \
                            dti, \
-                           annual_inc
+                           annual_inc, \
+                           loan_amount, \
+                           loan_term
                     FROM predictions
                     WHERE user_id = :user_id
                     ORDER BY created_at DESC LIMIT :limit \
@@ -430,7 +431,7 @@ class DatabaseManager:
         try:
             # Conectar sin especificar base de datos
             temp_engine = create_engine(
-                f"mysql+mysqlconnector://{self.username}:{quote_plus(self.password)}@{self.host}:{self.port}/",
+                f"mysql+mysqlconnector://{self.username}:{self.password}@{self.host}:{self.port}/",
                 echo=False
             )
 
@@ -446,6 +447,5 @@ class DatabaseManager:
             return False
 
 
-# ⭐⭐ ESTA ES LA LÍNEA IMPORTANTE ⭐⭐
-# Crear instancia global que se importará en otros módulos
+# Instancia global de la base de datos
 db_manager = DatabaseManager()
