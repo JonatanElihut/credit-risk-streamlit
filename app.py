@@ -1309,12 +1309,16 @@ def show_history_page():
     df_display['risk_probability'] = df_display['risk_probability'].apply(lambda x: f"{x:.1%}")
     df_display['annual_inc'] = df_display['annual_inc'].apply(lambda x: f"${x:,.0f}")
     df_display['out_prncp'] = df_display['out_prncp'].apply(lambda x: f"${x:,.2f}")
+    df_display['loan_amount'] = df_display['loan_amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+    df_display['loan_term'] = df_display['loan_term'].apply(lambda x: f"{int(x)} meses" if pd.notna(x) else "N/A")
 
     col_map = {
         'created_at': 'Fecha',
         'decision': 'Resultado',
         'risk_level': 'Nivel de riesgo',
         'risk_probability': 'Probabilidad',
+        'loan_amount': 'Monto solicitado',
+        'loan_term': 'Plazo',
         'out_prncp': 'Saldo pendiente',
         'dti': 'DTI (%)',
         'annual_inc': 'Ingresos anuales'
