@@ -1,7 +1,17 @@
 """
-Aplicación principal de Streamlit - Sistema de Predicción de Riesgo Crediticio
-VERSIÓN CORREGIDA PARA DAR MISMOS RESULTADOS QUE TKINTER
+app.py — Sistema de Predicción de Riesgo Crediticio
+Versión adaptada para usuario final sin conocimientos financieros.
+
+MEJORAS INCLUIDAS:
+- Monto del préstamo solicitado
+- Plazo en meses (6-60 meses)
+- Tasa de interés anual visible y editable
+- CAT (Costo Anual Total) estimado
+- Mensualidad calculada automáticamente
+- Intereses totales visibles
+- Mapeo correcto al modelo (funded_amnt_inv, int_rate)
 """
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -10,23 +20,253 @@ import plotly.graph_objects as go
 import plotly.express as px
 import json
 
-# Configuración de la página
 st.set_page_config(
-    page_title="🏦 Sistema de Riesgo Crediticio",
+    page_title="🏦 Simulador de Crédito",
     page_icon="🏦",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Importar módulos
 from utils.auth import auth_manager
 from utils.database import db_manager
 from utils.prediction import prediction_manager
 from utils.visualization import viz_manager
 from utils.translation_helper import TranslationHelper
 
+# ---------------------------------------------------------------------------
+# CONSTANTES Y VALORES POR DEFECTO
+# ---------------------------------------------------------------------------
+
+FEATURE_KEYS = [
+    'out_prncp', 'out_prncp_inv', 'last_pymnt_amnt', 'total_rec_prncp',
+    'recoveries', 'collection_recovery_fee', 'total_pymnt', 'installment',
+    'funded_amnt_inv', 'total_pymnt_inv', 'total_rec_int',
+    'hardship_payoff_balance_amount', 'orig_projected_additional_accrued_interest',
+    'int_rate', 'hardship_amount', 'total_rec_late_fee',
+    'hardship_last_payment_amount', 'dti', 'annual_inc', 'bc_util'
+]
+
+DEFAULT_VALUES = {
+    'out_prncp': 0.0,
+    'out_prncp_inv': 0.0,
+    'last_pymnt_amnt': 500.0,
+    'total_rec_prncp': 1000.0,
+    'recoveries': 0.0,
+    'collection_recovery_fee': 0.0,
+    'total_pymnt': 2000.0,
+    'installment': 250.0,
+    'funded_amnt_inv': 8000.0,
+    'total_pymnt_inv': 2000.0,
+    'total_rec_int': 500.0,
+    'hardship_payoff_balance_amount': 0.0,
+    'orig_projected_additional_accrued_interest': 0.0,
+    'int_rate': 18.0,  # Tasa por defecto actualizada
+    'hardship_amount': 0.0,
+    'total_rec_late_fee': 0.0,
+    'hardship_last_payment_amount': 0.0,
+    'dti': 10.0,
+    'annual_inc': 95000.0,
+    'bc_util': 15.0
+}
+
+# Perfiles actualizados con monto, plazo y tasa
+PROFILES = {
+    "minimal": {
+        'name': "🟢 Riesgo mínimo (0–20%)",
+        'values': {
+            'out_prncp': 0.0, 'out_prncp_inv': 0.0, 'last_pymnt_amnt': 450.0,
+            'total_rec_prncp': 9800.0, 'recoveries': 0.0, 'collection_recovery_fee': 0.0,
+            'total_pymnt': 10500.0, 'installment': 300.0, 'funded_amnt_inv': 10000.0,
+            'total_pymnt_inv': 10500.0, 'total_rec_int': 700.0,
+            'hardship_payoff_balance_amount': 0.0,
+            'orig_projected_additional_accrued_interest': 0.0,
+            'int_rate': 12.0, 'hardship_amount': 0.0, 'total_rec_late_fee': 0.0,
+            'hardship_last_payment_amount': 0.0, 'dti': 8.5,
+            'annual_inc': 120000.0, 'bc_util': 15.5
+        },
+        'loan_amount': 50000,
+        'loan_term': 24,
+        'interest_rate': 12.0,
+        'expected_result': "APROBADO",
+        'description': "Perfil premium — ingresos altos, sin deudas pendientes"
+    },
+    "low": {
+        'name': "🟡 Riesgo bajo (20–40%)",
+        'values': {
+            'out_prncp': 500.0, 'out_prncp_inv': 400.0, 'last_pymnt_amnt': 350.0,
+            'total_rec_prncp': 4500.0, 'recoveries': 0.0, 'collection_recovery_fee': 0.0,
+            'total_pymnt': 5000.0, 'installment': 250.0, 'funded_amnt_inv': 8000.0,
+            'total_pymnt_inv': 5000.0, 'total_rec_int': 500.0,
+            'hardship_payoff_balance_amount': 0.0,
+            'orig_projected_additional_accrued_interest': 0.0,
+            'int_rate': 16.0, 'hardship_amount': 0.0, 'total_rec_late_fee': 0.0,
+            'hardship_last_payment_amount': 0.0, 'dti': 12.5,
+            'annual_inc': 85000.0, 'bc_util': 25.5
+        },
+        'loan_amount': 30000,
+        'loan_term': 18,
+        'interest_rate': 16.0,
+        'expected_result': "APROBADO",
+        'description': "Perfil sólido — empleado formal con historial limpio"
+    },
+    "high": {
+        'name': "🔴 Riesgo alto (40–60%)",
+        'values': {
+            'out_prncp': 6000.0, 'out_prncp_inv': 5500.0, 'last_pymnt_amnt': 100.0,
+            'total_rec_prncp': 800.0, 'recoveries': 500.0, 'collection_recovery_fee': 75.0,
+            'total_pymnt': 1200.0, 'installment': 450.0, 'funded_amnt_inv': 15000.0,
+            'total_pymnt_inv': 1200.0, 'total_rec_int': 100.0,
+            'hardship_payoff_balance_amount': 2500.0,
+            'orig_projected_additional_accrued_interest': 300.0,
+            'int_rate': 32.0, 'hardship_amount': 3000.0, 'total_rec_late_fee': 50.0,
+            'hardship_last_payment_amount': 100.0, 'dti': 38.5,
+            'annual_inc': 45000.0, 'bc_util': 75.5
+        },
+        'loan_amount': 80000,
+        'loan_term': 36,
+        'interest_rate': 32.0,
+        'expected_result': "RECHAZADO",
+        'description': "Perfil de riesgo — sobreendeudamiento, historial problemático"
+    },
+    "default": {
+        'name': "⚙️ Valores predeterminados",
+        'values': DEFAULT_VALUES.copy(),
+        'loan_amount': 20000,
+        'loan_term': 12,
+        'interest_rate': 18.0,
+        'expected_result': "APROBADO",
+        'description': "Valores iniciales del sistema"
+    }
+}
+
+
+# ---------------------------------------------------------------------------
+# FUNCIONES FINANCIERAS
+# ---------------------------------------------------------------------------
+
+def obtener_tasa_estimada(dti, bc_util, ingreso_mensual, monto_prestamo, plazo_meses):
+    """
+    Estima una tasa de interés basada en el perfil de riesgo del usuario.
+    Considera DTI, uso de crédito, ingreso, monto y plazo.
+
+    Returns:
+        float: Tasa anual estimada (%)
+    """
+    # Base inicial (tasa base del mercado mexicano para créditos personales 2024-2025)
+    tasa_base = 18.0
+
+    # 1. Ajuste por DTI (deuda vs ingreso)
+    if dti < 15:
+        tasa_base -= 4  # Excelente capacidad
+    elif dti < 30:
+        tasa_base -= 2  # Buen perfil
+    elif dti < 40:
+        tasa_base += 1  # Riesgo moderado
+    elif dti < 50:
+        tasa_base += 4  # Riesgo alto
+    else:
+        tasa_base += 8  # Riesgo extremo
+
+    # 2. Ajuste por bc_util (uso de crédito en buró)
+    if bc_util < 30:
+        tasa_base -= 3  # Saludable
+    elif bc_util < 50:
+        tasa_base -= 1  # Moderado
+    elif bc_util < 75:
+        tasa_base += 2  # Elevado
+    else:
+        tasa_base += 6  # Comprometido
+
+    # 3. Ajuste por ingreso mensual
+    if ingreso_mensual > 50000:
+        tasa_base -= 3  # Alto ingreso
+    elif ingreso_mensual > 25000:
+        tasa_base -= 1  # Ingreso medio-alto
+    elif ingreso_mensual < 15000:
+        tasa_base += 3  # Ingreso bajo
+    elif ingreso_mensual < 10000:
+        tasa_base += 6  # Ingreso muy bajo
+
+    # 4. Ajuste por monto del préstamo
+    if monto_prestamo > 200000:
+        tasa_base += 3
+    elif monto_prestamo > 100000:
+        tasa_base += 1
+    elif monto_prestamo < 20000:
+        tasa_base -= 1
+
+    # 5. Ajuste por plazo
+    if plazo_meses > 36:
+        tasa_base += 2
+    elif plazo_meses > 24:
+        tasa_base += 1
+    elif plazo_meses <= 12:
+        tasa_base -= 1
+
+    # Límites realistas para México
+    tasa_base = max(9.0, min(65.0, tasa_base))
+
+    return round(tasa_base, 1)
+
+
+def calcular_mensualidad(monto, plazo_meses, tasa_anual_porcentaje):
+    """
+    Calcula la mensualidad de un préstamo usando fórmula de interés compuesto.
+
+    Args:
+        monto (float): Monto del préstamo
+        plazo_meses (int): Plazo en meses
+        tasa_anual_porcentaje (float): Tasa de interés anual (%)
+
+    Returns:
+        float: Mensualidad
+    """
+    if plazo_meses <= 0 or monto <= 0:
+        return 0.0
+
+    tasa_mensual = (tasa_anual_porcentaje / 100) / 12
+
+    if tasa_mensual == 0:
+        return monto / plazo_meses
+
+    # Fórmula: P = [r * PV] / [1 - (1 + r)^(-n)]
+    mensualidad = (tasa_mensual * monto) / (1 - (1 + tasa_mensual) ** (-plazo_meses))
+
+    return round(mensualidad, 2)
+
+
+def calcular_cat_estimado(tasa_anual, monto, plazo_meses):
+    """
+    Calcula un CAT estimado (Costo Anual Total) incluyendo comisiones típicas.
+    En México, el CAT suele ser 2-5% más alto que la tasa de interés.
+    """
+    # Comisiones típicas en México
+    comision_apertura_porcentaje = 2.0  # 2% del monto
+    comision_anual_porcentaje = 0.5  # 0.5% anual
+
+    # Cálculo simplificado del CAT
+    ajuste_anual = comision_anual_porcentaje
+    ajuste_apertura = (comision_apertura_porcentaje * 12) / plazo_meses
+
+    cat_estimado = tasa_anual + ajuste_anual + ajuste_apertura
+
+    # El CAT no puede ser más del 50% superior a la tasa
+    return round(min(cat_estimado, tasa_anual * 1.5), 1)
+
+
+def calcular_intereses_totales(monto, plazo_meses, tasa_anual_porcentaje):
+    """Calcula el total de intereses pagados durante la vida del préstamo"""
+    mensualidad = calcular_mensualidad(monto, plazo_meses, tasa_anual_porcentaje)
+    total_pagado = mensualidad * plazo_meses
+    intereses = total_pagado - monto
+    return max(0, round(intereses, 2))
+
+
+# ---------------------------------------------------------------------------
+# SESSION STATE
+# ---------------------------------------------------------------------------
+
 def initialize_session_state():
-    """Inicializar variables del session_state"""
     if 'user' not in st.session_state:
         st.session_state.user = None
     if 'authenticated' not in st.session_state:
@@ -35,35 +275,182 @@ def initialize_session_state():
         st.session_state.form_initialized = False
     if 'password_changed' not in st.session_state:
         st.session_state.password_changed = False
+    if 'tiene_historial' not in st.session_state:
+        st.session_state.tiene_historial = False
+    if 'tuvo_cobranza' not in st.session_state:
+        st.session_state.tuvo_cobranza = False
+    # Campos del préstamo
+    if 'loan_amount' not in st.session_state:
+        st.session_state.loan_amount = 20000.0
+    if 'loan_term' not in st.session_state:
+        st.session_state.loan_term = 12
+    if 'user_interest_rate' not in st.session_state:
+        st.session_state.user_interest_rate = 18.0
+    if 'use_suggested_rate' not in st.session_state:
+        st.session_state.use_suggested_rate = True
+
+
+def init_form_values():
+    """Inicializar los campos del formulario en session_state si aún no existen."""
+    if not st.session_state.form_initialized:
+        for key, value in DEFAULT_VALUES.items():
+            st.session_state[key] = value
+        st.session_state.form_initialized = True
+        st.session_state.current_profile = "default"
+        st.session_state.loan_amount = 20000.0
+        st.session_state.loan_term = 12
+        st.session_state.user_interest_rate = 18.0
+        st.session_state.use_suggested_rate = True
+
+
+# ---------------------------------------------------------------------------
+# HELPER: INYECTAR CAMPOS OCULTOS
+# ---------------------------------------------------------------------------
+
+def inject_hidden_fields():
+    """
+    Calcula y escribe en session_state los campos que el modelo necesita.
+    IMPORTANTE:
+    - funded_amnt_inv = monto del préstamo
+    - int_rate = tasa de interés seleccionada por el usuario
+    - installment = mensualidad calculada (o la que el usuario puede pagar)
+    """
+    loan_amount = st.session_state.get('loan_amount', 20000.0)
+    loan_term = st.session_state.get('loan_term', 12)
+    interest_rate = st.session_state.get('user_interest_rate', 18.0)
+    installment = st.session_state.get('installment', 0.0)
+    annual_inc = st.session_state.get('annual_inc', 95000.0)
+    recoveries = st.session_state.get('recoveries', 0.0)
+    out_prncp = st.session_state.get('out_prncp', 0.0)
+    last_pymnt_amnt = st.session_state.get('last_pymnt_amnt', 0.0)
+    dti = st.session_state.get('dti', 10.0)
+    bc_util = st.session_state.get('bc_util', 15.0)
+
+    # ============================================================
+    # CAMPOS CLAVE PARA EL MODELO
+    # ============================================================
+    st.session_state['funded_amnt_inv'] = loan_amount
+    st.session_state['int_rate'] = interest_rate
+
+    # Si el usuario no especificó mensualidad, calcularla
+    if installment == 0 or installment is None:
+        installment = calcular_mensualidad(loan_amount, loan_term, interest_rate)
+        st.session_state['installment'] = installment
+
+    # Derivados basados en el préstamo
+    total_pagado_estimado = installment * loan_term
+    st.session_state['total_pymnt'] = round(total_pagado_estimado, 2)
+    st.session_state['total_pymnt_inv'] = round(total_pagado_estimado, 2)
+
+    # Otros derivados
+    st.session_state['out_prncp_inv'] = round(out_prncp * 0.9, 2)
+    st.session_state['total_rec_prncp'] = round(max(0.0, (annual_inc * 0.1) - out_prncp), 2)
+    st.session_state['total_rec_int'] = round(interest_rate * installment / 100, 2)
+    st.session_state['collection_recovery_fee'] = round(recoveries * 0.25, 2)
+
+    # Campos siempre en cero
+    st.session_state['hardship_payoff_balance_amount'] = 0.0
+    st.session_state['hardship_amount'] = 0.0
+    st.session_state['hardship_last_payment_amount'] = 0.0
+    st.session_state['orig_projected_additional_accrued_interest'] = 0.0
+    st.session_state['total_rec_late_fee'] = 0.0
+
+
+# ---------------------------------------------------------------------------
+# HELPER: EVALUACIÓN DE FACTORES
+# ---------------------------------------------------------------------------
+
+def evaluate_factor(factor, value):
+    """Devuelve dict con status, text e icon para un campo dado."""
+    if factor == 'out_prncp':
+        if value == 0:
+            return {'status': 'good', 'text': 'Sin deuda pendiente', 'icon': '✅'}
+        elif value < 10000:
+            return {'status': 'good', 'text': 'Saldo bajo — buen manejo', 'icon': '👍'}
+        elif value < 50000:
+            return {'status': 'medium', 'text': 'Saldo moderado — vigilar', 'icon': '⚠️'}
+        else:
+            return {'status': 'bad', 'text': 'Saldo alto — sobreendeudamiento', 'icon': '❌'}
+    elif factor == 'dti':
+        if value < 30:
+            return {'status': 'good', 'text': 'Excelente — capacidad de sobra', 'icon': '✅'}
+        elif value < 40:
+            return {'status': 'good', 'text': 'Adecuado — dentro del límite', 'icon': '👍'}
+        elif value < 50:
+            return {'status': 'medium', 'text': 'Limitado — riesgo moderado', 'icon': '⚠️'}
+        else:
+            return {'status': 'bad', 'text': 'Muy alto — sobreendeudamiento', 'icon': '❌'}
+    elif factor == 'int_rate':
+        if value < 15:
+            return {'status': 'good', 'text': 'Tasa baja — muy competitiva', 'icon': '✅'}
+        elif value < 25:
+            return {'status': 'good', 'text': 'Tasa estándar del mercado', 'icon': '👍'}
+        elif value < 40:
+            return {'status': 'medium', 'text': 'Tasa alta — riesgo elevado', 'icon': '⚠️'}
+        else:
+            return {'status': 'bad', 'text': 'Tasa muy alta', 'icon': '❌'}
+    elif factor == 'bc_util':
+        if value < 30:
+            return {'status': 'good', 'text': 'Buró saludable', 'icon': '✅'}
+        elif value < 50:
+            return {'status': 'good', 'text': 'Uso moderado', 'icon': '👍'}
+        elif value < 75:
+            return {'status': 'medium', 'text': 'Uso elevado — vigilar', 'icon': '⚠️'}
+        else:
+            return {'status': 'bad', 'text': 'Capacidad comprometida', 'icon': '❌'}
+    elif factor == 'annual_inc':
+        monthly = value / 12
+        if monthly >= 45000:
+            return {'status': 'good', 'text': 'Ingreso alto', 'icon': '✅'}
+        elif monthly >= 25000:
+            return {'status': 'good', 'text': 'Ingreso clase media', 'icon': '👍'}
+        elif monthly >= 12000:
+            return {'status': 'medium', 'text': 'Ingreso básico', 'icon': '⚠️'}
+        else:
+            return {'status': 'bad', 'text': 'Ingreso muy bajo', 'icon': '❌'}
+    elif factor == 'last_pymnt_amnt':
+        if value == 0:
+            return {'status': 'bad', 'text': 'Sin pago reciente', 'icon': '❌'}
+        elif value < 500:
+            return {'status': 'medium', 'text': 'Pago parcial', 'icon': '⚠️'}
+        else:
+            return {'status': 'good', 'text': 'Pago regular', 'icon': '✅'}
+    elif factor == 'recoveries':
+        if value == 0:
+            return {'status': 'good', 'text': 'Sin cobranza previa', 'icon': '✅'}
+        elif value < 500:
+            return {'status': 'medium', 'text': 'Cobranza menor', 'icon': '⚠️'}
+        else:
+            return {'status': 'bad', 'text': 'Cobranza significativa', 'icon': '❌'}
+    else:
+        return {'status': 'neutral', 'text': 'Normal', 'icon': '📝'}
+
+
+# ---------------------------------------------------------------------------
+# PÁGINA DE LOGIN / REGISTRO
+# ---------------------------------------------------------------------------
 
 def show_login_page():
-    """Mostrar página de inicio de sesión/registro"""
-    st.title("🏦 Sistema de Predicción de Riesgo Crediticio")
+    st.title("🏦 Simulador de Crédito")
+    st.markdown("Evalúa tu solicitud de préstamo de forma rápida y sencilla.")
     st.markdown("---")
 
-    # Verificar conexión a base de datos
-    with st.spinner("Verificando conexión a base de datos..."):
-        if db_manager.test_connection():
-            st.success("✅ Conexión a base de datos establecida")
-        else:
-            st.error("❌ No se pudo conectar a la base de datos")
+    with st.spinner("Verificando conexión..."):
+        if not db_manager.test_connection():
+            st.error("❌ No se pudo conectar a la base de datos. Verifica tu archivo .env")
             st.stop()
 
-    # Pestañas para Login/Registro
-    tab1, tab2 = st.tabs(["🔐 Iniciar Sesión", "📝 Registrarse"])
+    tab1, tab2 = st.tabs(["🔐 Iniciar sesión", "📝 Crear cuenta"])
 
     with tab1:
-        st.header("Iniciar Sesión")
-
+        st.subheader("Bienvenido de vuelta")
         with st.form("login_form"):
-            email = st.text_input("Email")
+            email = st.text_input("Correo electrónico")
             password = st.text_input("Contraseña", type="password")
-
-            submit = st.form_submit_button("Ingresar")
-
+            submit = st.form_submit_button("Ingresar", use_container_width=True)
             if submit:
                 if not email or not password:
-                    st.error("❌ Por favor, complete todos los campos")
+                    st.error("❌ Por favor completa todos los campos")
                 else:
                     success, message = auth_manager.login_user(email, password)
                     if success:
@@ -73,62 +460,70 @@ def show_login_page():
                         st.error(message)
 
     with tab2:
-        st.header("Registrarse")
-
+        st.subheader("Crea tu cuenta")
         with st.form("register_form"):
-            full_name = st.text_input("Nombre Completo")
-            email = st.text_input("Email")
+            full_name = st.text_input("Nombre completo")
+            email = st.text_input("Correo electrónico")
             password = st.text_input("Contraseña", type="password")
-            confirm_password = st.text_input("Confirmar Contraseña", type="password")
-
-            submit = st.form_submit_button("Crear Cuenta")
-
+            confirm_password = st.text_input("Confirmar contraseña", type="password")
+            submit = st.form_submit_button("Registrarme", use_container_width=True)
             if submit:
                 if not all([full_name, email, password, confirm_password]):
-                    st.error("❌ Por favor, complete todos los campos")
+                    st.error("❌ Por favor completa todos los campos")
                 else:
                     success, message = auth_manager.register_user(
                         email, full_name, password, confirm_password
                     )
                     if success:
                         st.success(message)
-                        st.info("✅ Ahora puede iniciar sesión con sus credenciales")
+                        st.info("✅ Ahora puedes iniciar sesión")
                     else:
                         st.error(message)
 
 
-def show_main_page():
-    """Mostrar página principal después del login"""
-    user = auth_manager.get_current_user()
+# ---------------------------------------------------------------------------
+# BARRA LATERAL + NAVEGACIÓN
+# ---------------------------------------------------------------------------
 
-    # Barra lateral
+def show_sidebar(user):
     with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/2721/2721264.png", width=100)
-        st.markdown(f"### 👋 Bienvenido, {user['full_name']}")
-        st.markdown(f"📧 {user['email']}")
+        st.markdown(f"### 👋 Hola, {user['full_name'].split()[0]}")
+        st.caption(user['email'])
         st.markdown("---")
 
-        # Menú de navegación
-        st.markdown("### 📋 Navegación")
+        st.markdown("**Menú**")
         page = st.selectbox(
-            "Seleccione una página",
-            ["📊 Predicción", "📈 Análisis", "📋 Historial", "⚙️ Configuración", "🚪 Salir"]
+            "Ir a",
+            ["📊 Simulación", "📈 Análisis", "📋 Historial", "⚙️ Configuración"],
+            label_visibility="collapsed"
         )
 
         st.markdown("---")
 
-        # Información del modelo
-        if st.checkbox("ℹ️ Mostrar info del modelo"):
-            model_info = prediction_manager.get_model_info()
+        model_info = prediction_manager.get_model_info()
+        st.caption(f"Modelo: {model_info.get('type', 'Random Forest')}")
+        st.caption(f"Umbral: {prediction_manager.threshold:.0%}")
+
+        if st.checkbox("Ver detalle del modelo"):
             st.json(model_info.get('hyperparameters', {}))
 
-        # Botón de salir
-        if st.button("🚪 Cerrar Sesión", use_container_width=True):
+        st.markdown("---")
+        if st.button("🚪 Cerrar sesión", use_container_width=True):
             auth_manager.logout()
             st.rerun()
 
-    # Redirigir a la página seleccionada
-    if page == "📊 Predicción":
+    return page
+
+
+# ---------------------------------------------------------------------------
+# PÁGINA PRINCIPAL
+# ---------------------------------------------------------------------------
+
+def show_main_page():
+    user = auth_manager.get_current_user()
+    page = show_sidebar(user)
+
+    if page == "📊 Simulación":
         show_prediction_page()
     elif page == "📈 Análisis":
         show_analysis_page()
@@ -136,1274 +531,845 @@ def show_main_page():
         show_history_page()
     elif page == "⚙️ Configuración":
         show_configuration_page()
-    elif page == "🚪 Salir":
-        auth_manager.logout()
-        st.rerun()
 
+
+# ---------------------------------------------------------------------------
+# PÁGINA DE PREDICCIÓN — FORMULARIO COMPLETO
+# ---------------------------------------------------------------------------
 
 def show_prediction_page():
-    """Mostrar página de predicción - VERSIÓN MEXICANA COMPLETA"""
-    st.title("📊 Predicción de Riesgo Crediticio")
+    st.title("📊 Simulación de crédito")
+    st.markdown("Responde estas preguntas con honestidad. Solo te tomará 2 minutos.")
     st.markdown("---")
 
-    # Importar el helper de traducciones
-    from utils.translation_helper import TranslationHelper
+    init_form_values()
 
-    # Información del modelo
-    model_info = prediction_manager.get_model_info()
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("Modelo", model_info.get('type', 'Random Forest'))
-    with col2:
-        st.metric("Características", model_info.get('n_features', 'N/A'))
-    with col3:
-        st.metric("Umbral Actual", f"{prediction_manager.threshold:.1%}")
-
-    st.markdown("---")
-
-    # Control de umbral ajustable (igual que Tkinter: 0.1 a 0.9)
-    st.subheader("⚙️ Configuración de Umbral")
-
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        current_threshold = prediction_manager.threshold
-        new_threshold = st.slider(
-            "Umbral de decisión (probabilidad mínima para RECHAZAR)",
-            min_value=0.1,
-            max_value=0.9,
-            value=float(current_threshold),
-            step=0.05,
-            format="%.2f",
-            key="threshold_slider",
-            help="""Probabilidad mínima de riesgo para clasificar como RECHAZADO:
-            • Valores más bajos = Más aprobaciones (pero más riesgo)
-            • Valores más altos = Menos aprobaciones (pero menos riesgo)"""
-        )
-
-        if new_threshold != current_threshold:
-            prediction_manager.set_threshold(new_threshold)
-            st.success(f"✅ Umbral actualizado a {new_threshold:.1%}")
-
-    with col2:
-        st.metric("Umbral Actual", f"{current_threshold:.1%}")
-
-        # Botón para restablecer umbral
-        if st.button("🔄 Restablecer", key="reset_threshold", use_container_width=True):
-            prediction_manager.set_threshold(0.4)  # Valor por defecto de Tkinter
-            st.success("✅ Umbral restablecido a 40%")
-            st.rerun()
-
-    st.markdown("---")
-
-    # Primero definimos las claves comunes que todos los perfiles tendrán
-    FEATURE_KEYS = [
-        'out_prncp', 'out_prncp_inv', 'last_pymnt_amnt', 'total_rec_prncp',
-        'recoveries', 'collection_recovery_fee', 'total_pymnt', 'installment',
-        'funded_amnt_inv', 'total_pymnt_inv', 'total_rec_int',
-        'hardship_payoff_balance_amount', 'orig_projected_additional_accrued_interest',
-        'int_rate', 'hardship_amount', 'total_rec_late_fee',
-        'hardship_last_payment_amount', 'dti', 'annual_inc', 'bc_util'
-    ]
-
-    # Valores por defecto (igual que Tkinter)
-    default_values = {
-        'out_prncp': 0.0,
-        'out_prncp_inv': 0.0,
-        'last_pymnt_amnt': 500.0,
-        'total_rec_prncp': 1000.0,
-        'recoveries': 0.0,
-        'collection_recovery_fee': 0.0,
-        'total_pymnt': 2000.0,
-        'installment': 250.0,
-        'funded_amnt_inv': 8000.0,
-        'total_pymnt_inv': 2000.0,
-        'total_rec_int': 500.0,
-        'hardship_payoff_balance_amount': 0.0,
-        'orig_projected_additional_accrued_interest': 0.0,
-        'int_rate': 6.5,
-        'hardship_amount': 0.0,
-        'total_rec_late_fee': 0.0,
-        'hardship_last_payment_amount': 0.0,
-        'dti': 10.0,
-        'annual_inc': 95000.0,
-        'bc_util': 15.0
-    }
-
-    # Inicializar session state para los valores del formulario
-    if 'form_initialized' not in st.session_state:
-        # Inicializar cada campo individualmente en session_state
-        for key, value in default_values.items():
-            st.session_state[key] = value
-
-        st.session_state.form_initialized = True
-        st.session_state.current_profile = "default"
-
-    # Definir perfiles - VERSIÓN IDÉNTICA A TKINTER
-    PROFILES = {
-        "minimal": {
-            'name': "🟢 RIESGO MÍNIMO (0-20%)",
-            'values': {
-                'out_prncp': 0.0,
-                'out_prncp_inv': 0.0,
-                'last_pymnt_amnt': 450.0,
-                'total_rec_prncp': 9800.0,
-                'recoveries': 0.0,
-                'collection_recovery_fee': 0.0,
-                'total_pymnt': 10500.0,
-                'installment': 300.0,
-                'funded_amnt_inv': 10000.0,
-                'total_pymnt_inv': 10500.0,
-                'total_rec_int': 700.0,
-                'hardship_payoff_balance_amount': 0.0,
-                'orig_projected_additional_accrued_interest': 0.0,
-                'int_rate': 6.5,
-                'hardship_amount': 0.0,
-                'total_rec_late_fee': 0.0,
-                'hardship_last_payment_amount': 0.0,
-                'dti': 8.5,
-                'annual_inc': 120000.0,
-                'bc_util': 15.5
-            },
-            'expected_result': "APROBADO",
-            'expected_probability': "0-20%",
-            'description': "Cliente premium, historial crediticio impecable"
-        },
-        "low": {
-            'name': "🟡 RIESGO BAJO (20-40%)",
-            'values': {
-                'out_prncp': 500.0,
-                'out_prncp_inv': 400.0,
-                'last_pymnt_amnt': 350.0,
-                'total_rec_prncp': 4500.0,
-                'recoveries': 0.0,
-                'collection_recovery_fee': 0.0,
-                'total_pymnt': 5000.0,
-                'installment': 250.0,
-                'funded_amnt_inv': 8000.0,
-                'total_pymnt_inv': 5000.0,
-                'total_rec_int': 500.0,
-                'hardship_payoff_balance_amount': 0.0,
-                'orig_projected_additional_accrued_interest': 0.0,
-                'int_rate': 8.5,
-                'hardship_amount': 0.0,
-                'total_rec_late_fee': 0.0,
-                'hardship_last_payment_amount': 0.0,
-                'dti': 12.5,
-                'annual_inc': 85000.0,
-                'bc_util': 25.5
-            },
-            'expected_result': "APROBADO",
-            'expected_probability': "20-40%",
-            'description': "Cliente sólido, aprobación estándar"
-        },
-        "high": {
-            'name': "🔴 RIESGO ALTO (40-60%)",
-            'values': {
-                'out_prncp': 6000.0,
-                'out_prncp_inv': 5500.0,
-                'last_pymnt_amnt': 100.0,
-                'total_rec_prncp': 800.0,
-                'recoveries': 500.0,
-                'collection_recovery_fee': 75.0,
-                'total_pymnt': 1200.0,
-                'installment': 450.0,
-                'funded_amnt_inv': 15000.0,
-                'total_pymnt_inv': 1200.0,
-                'total_rec_int': 100.0,
-                'hardship_payoff_balance_amount': 2500.0,
-                'orig_projected_additional_accrued_interest': 300.0,
-                'int_rate': 18.5,
-                'hardship_amount': 3000.0,
-                'total_rec_late_fee': 50.0,
-                'hardship_last_payment_amount': 100.0,
-                'dti': 38.5,
-                'annual_inc': 45000.0,
-                'bc_util': 75.5
-            },
-            'expected_result': "RECHAZADO",
-            'expected_probability': "40-60%",
-            'description': "Cliente de alto riesgo, rechazo recomendado"
-        },
-        "default": {
-            'name': "⚙️ VALORES PREDETERMINADOS",
-            'values': default_values.copy(),
-            'expected_result': "APROBADO",
-            'expected_probability': "0-20%",
-            'description': "Valores iniciales del sistema"
-        }
-    }
-
-    # Mostrar perfil actual
-    if 'current_profile' in st.session_state:
-        profile_name = PROFILES.get(st.session_state.current_profile, {}).get('name', 'Personalizado')
-        profile_desc = PROFILES.get(st.session_state.current_profile, {}).get('description', '')
-        st.info(f"📋 **Perfil actual:** {profile_name}\n\n{profile_desc}")
-
-    # Botones de acción
-    st.markdown("### 🎯 Cargar Perfiles Predefinidos")
-
-    # Primera fila de botones
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if st.button("🟢 RIESGO MÍNIMO", use_container_width=True, key="btn_minimal"):
-            for key, value in PROFILES["minimal"]['values'].items():
-                st.session_state[key] = value
-            st.session_state.current_profile = "minimal"
-            st.success(PROFILES["minimal"]['name'])
-            st.info("Cliente premium - Aprobación automática")
-
-    with col2:
-        if st.button("🟡 RIESGO BAJO", use_container_width=True, key="btn_low"):
-            for key, value in PROFILES["low"]['values'].items():
-                st.session_state[key] = value
-            st.session_state.current_profile = "low"
-            st.success(PROFILES["low"]['name'])
-            st.info("Cliente sólido - Aprobación estándar")
-
-    with col3:
-        if st.button("🔴 RIESGO ALTO", use_container_width=True, key="btn_high"):
-            for key, value in PROFILES["high"]['values'].items():
-                st.session_state[key] = value
-            st.session_state.current_profile = "high"
-            st.success(PROFILES["high"]['name'])
-            st.info("Cliente de alto riesgo - Rechazo recomendado")
-
-    # Tercera fila - botones adicionales
-    col7, col8 = st.columns(2)
-
-    with col7:
-        if st.button("⚙️ PREDETERMINADOS", use_container_width=True, key="btn_default"):
-            for key, value in PROFILES["default"]['values'].items():
-                st.session_state[key] = value
-            st.session_state.current_profile = "default"
-            st.success(PROFILES["default"]['name'])
-            st.info("Valores por defecto del sistema")
-
-    with col8:
-        if st.button("🎲 VALORES ALEATORIOS", use_container_width=True, key="btn_random"):
-            import random
-            random_values = {}
-            for key in FEATURE_KEYS:
-                if 'rate' in key or 'util' in key or 'dti' in key:
-                    random_values[key] = round(random.uniform(0, 30), 1)
-                elif 'inc' in key:
-                    random_values[key] = round(random.uniform(30000, 120000), 0)
-                elif 'amnt' in key or 'prncp' in key or 'pymnt' in key:
-                    random_values[key] = round(random.uniform(0, 10000), 2)
-                else:
-                    random_values[key] = round(random.uniform(0, 1000), 2)
-
-            for key, value in random_values.items():
-                st.session_state[key] = value
-            st.session_state.current_profile = "random"
-            st.success("🎲 Valores aleatorios generados")
-
-    # Sección de contexto mexicano
-    st.markdown("---")
-
-    # Agregar información contextual mexicana
-    with st.expander("🇲🇽 Contexto Mexicano - Información de Referencia", expanded=False):
-        context_info = TranslationHelper.create_mexican_context_info()
-
-        # Crear pestañas para cada sección de contexto
-        dti_tab, income_tab, interest_tab, credit_tab = st.tabs([
-            "📊 DTI",
-            "💰 Ingresos",
-            "📈 Tasas",
-            "💳 Crédito"
-        ])
-
-        with dti_tab:
-            st.markdown(context_info['dti_info']['content'])
-            st.progress(0.35, text="DTI Recomendado: <35%")
-
-        with income_tab:
-            st.markdown(context_info['income_info']['content'])
-
-            # Tabla de referencia de ingresos
-            income_data = {
-                "Nivel": ["Salario Mínimo", "Ingreso Promedio", "Clase Media Baja", "Clase Media Alta"],
-                "Mensual (MXN)": ["$7,468", "$12,000 - $25,000", "$25,000 - $45,000", "$45,000 - $80,000"],
-                "Anual (MXN)": ["$89,616", "$144,000 - $300,000", "$300,000 - $540,000", "$540,000 - $960,000"]
-            }
-            st.dataframe(income_data, use_container_width=True)
-
-        with interest_tab:
-            st.markdown(context_info['interest_info']['content'])
-
-            # Gráfico de tasas
-            import plotly.graph_objects as go
-
-            rates_data = {
-                "Producto": ["Tarjetas Crédito", "Crédito Personal", "Nómina", "Automotriz"],
-                "Tasa Mínima (%)": [35, 15, 12, 8],
-                "Tasa Máxima (%)": [65, 40, 25, 15],
-                "CAT Promedio (%)": [55, 28, 18, 11]
-            }
-
-            fig = go.Figure(data=[
-                go.Bar(name='Tasa Mínima', x=rates_data["Producto"], y=rates_data["Tasa Mínima (%)"]),
-                go.Bar(name='CAT Promedio', x=rates_data["Producto"], y=rates_data["CAT Promedio (%)"]),
-                go.Bar(name='Tasa Máxima', x=rates_data["Producto"], y=rates_data["Tasa Máxima (%)"])
-            ])
-
-            fig.update_layout(
-                title="Tasas de Interés en México 2024",
-                barmode='group',
-                yaxis_title="Tasa Anual (%)",
-                height=400
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        with credit_tab:
-            st.markdown("""
-            **📋 Utilización de Crédito (Buró de Crédito):**
-            - **Excelente (<30%):** Buen manejo del crédito
-            - **Adecuado (30-50%):** Uso moderado
-            - **Alto (50-75%):** Riesgo de sobreendeudamiento
-            - **Muy Alto (>75%):** Capacidad comprometida
-
-            **🏛️ Instituciones regulatorias:**
-            • **Banxico:** Banco de México (tasa de referencia)
-            • **CNBV:** Comisión Nacional Bancaria y de Valores
-            • **Condusef:** Protección a usuarios financieros
-            • **Buró de Crédito:** Historial crediticio
-
-            **📄 Documentación común requerida:**
-            1. Identificación oficial (INE)
-            2. Comprobante de domicilio
-            3. Comprobantes de ingresos (3 meses)
-            4. Estados de cuenta bancarios
-            """)
+    # -----------------------------------------------------------------------
+    # PERFILES DE PRUEBA
+    # -----------------------------------------------------------------------
+    with st.expander("🧪 Cargar perfil de prueba", expanded=False):
+        st.caption("Útil para probar el sistema con datos de ejemplo.")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            if st.button("🟢 Riesgo mínimo", use_container_width=True):
+                profile = PROFILES["minimal"]
+                for k, v in profile['values'].items():
+                    st.session_state[k] = v
+                st.session_state.loan_amount = profile['loan_amount']
+                st.session_state.loan_term = profile['loan_term']
+                st.session_state.user_interest_rate = profile['interest_rate']
+                st.session_state.current_profile = "minimal"
+                st.session_state.tiene_historial = True
+                st.session_state.tuvo_cobranza = False
+                st.rerun()
+        with col2:
+            if st.button("🟡 Riesgo bajo", use_container_width=True):
+                profile = PROFILES["low"]
+                for k, v in profile['values'].items():
+                    st.session_state[k] = v
+                st.session_state.loan_amount = profile['loan_amount']
+                st.session_state.loan_term = profile['loan_term']
+                st.session_state.user_interest_rate = profile['interest_rate']
+                st.session_state.current_profile = "low"
+                st.session_state.tiene_historial = True
+                st.session_state.tuvo_cobranza = False
+                st.rerun()
+        with col3:
+            if st.button("🔴 Riesgo alto", use_container_width=True):
+                profile = PROFILES["high"]
+                for k, v in profile['values'].items():
+                    st.session_state[k] = v
+                st.session_state.loan_amount = profile['loan_amount']
+                st.session_state.loan_term = profile['loan_term']
+                st.session_state.user_interest_rate = profile['interest_rate']
+                st.session_state.current_profile = "high"
+                st.session_state.tiene_historial = True
+                st.session_state.tuvo_cobranza = True
+                st.rerun()
+        with col4:
+            if st.button("⚙️ Predeterminados", use_container_width=True):
+                profile = PROFILES["default"]
+                for k, v in profile['values'].items():
+                    st.session_state[k] = v
+                st.session_state.loan_amount = profile['loan_amount']
+                st.session_state.loan_term = profile['loan_term']
+                st.session_state.user_interest_rate = profile['interest_rate']
+                st.session_state.current_profile = "default"
+                st.session_state.tiene_historial = False
+                st.session_state.tuvo_cobranza = False
+                st.rerun()
 
     st.markdown("---")
 
-    # Formulario de entrada CON NOMBRES MEXICANOS
-    st.header("📝 Datos del Solicitante - Contexto Mexicano")
+    # -----------------------------------------------------------------------
+    # BLOQUE 1 — INFORMACIÓN BÁSICA
+    # -----------------------------------------------------------------------
+    st.subheader("💰 Tu situación económica actual")
 
-    # Crear columnas para el formulario
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("📊 Información del Crédito")
-
-        # Saldo Capital Pendiente
-        out_prncp = TranslationHelper.create_input_field_with_context(
-            'out_prncp',
-            st.session_state.get('out_prncp', 0.0),
+        ingreso_mensual = st.number_input(
+            "¿Cuánto ganas al mes? (MXN)",
             min_value=0.0,
             max_value=1000000.0,
-            step=1000.0,
-            key="out_prncp"
+            value=round(st.session_state.get('annual_inc', 95000.0) / 12, 0),
+            step=500.0,
+            key="ingreso_mensual_input",
+            help="Tu ingreso antes de impuestos. Si eres independiente, pon el promedio de los últimos 3 meses."
         )
+        st.session_state['annual_inc'] = round(ingreso_mensual * 12, 2)
 
-        # Saldo Inversionistas Pendiente
-        out_prncp_inv = TranslationHelper.create_input_field_with_context(
-            'out_prncp_inv',
-            st.session_state.get('out_prncp_inv', 0.0),
-            min_value=0.0,
-            max_value=1000000.0,
-            step=1000.0,
-            key="out_prncp_inv"
-        )
+        salario_minimo_mensual = 7468
+        veces_salario = ingreso_mensual / salario_minimo_mensual if ingreso_mensual > 0 else 0
+        st.caption(f"Equivale a {veces_salario:.1f}x el salario mínimo mensual")
 
-        # Monto Último Pago
-        last_pymnt_amnt = TranslationHelper.create_input_field_with_context(
-            'last_pymnt_amnt',
-            st.session_state.get('last_pymnt_amnt', 500.0),
-            min_value=0.0,
-            max_value=50000.0,
-            step=100.0,
-            key="last_pymnt_amnt"
-        )
-
-        # Total Capital Recibido
-        total_rec_prncp = TranslationHelper.create_input_field_with_context(
-            'total_rec_prncp',
-            st.session_state.get('total_rec_prncp', 1000.0),
-            min_value=0.0,
-            max_value=1000000.0,
-            step=1000.0,
-            key="total_rec_prncp"
-        )
-
-        # Cobranza Recuperada
-        recoveries = TranslationHelper.create_input_field_with_context(
-            'recoveries',
-            st.session_state.get('recoveries', 0.0),
-            min_value=0.0,
-            max_value=100000.0,
-            step=1000.0,
-            key="recoveries"
-        )
-
-        # Comisión de Cobranza
-        collection_recovery_fee = TranslationHelper.create_input_field_with_context(
-            'collection_recovery_fee',
-            st.session_state.get('collection_recovery_fee', 0.0),
-            min_value=0.0,
-            max_value=50000.0,
-            step=100.0,
-            key="collection_recovery_fee"
-        )
-
-        # Total Pagado
-        total_pymnt = TranslationHelper.create_input_field_with_context(
-            'total_pymnt',
-            st.session_state.get('total_pymnt', 2000.0),
-            min_value=0.0,
-            max_value=1000000.0,
-            step=1000.0,
-            key="total_pymnt"
-        )
-
-        # Pago Mensual (Mensualidad)
-        installment = TranslationHelper.create_input_field_with_context(
-            'installment',
-            st.session_state.get('installment', 250.0),
-            min_value=0.0,
-            max_value=50000.0,
-            step=100.0,
-            key="installment"
-        )
-
-        # Monto Financiado por Inversionistas
-        funded_amnt_inv = TranslationHelper.create_input_field_with_context(
-            'funded_amnt_inv',
-            st.session_state.get('funded_amnt_inv', 8000.0),
+    with col2:
+        deuda_mensual = st.number_input(
+            "¿Cuánto pagas al mes en otras deudas? (MXN)",
             min_value=0.0,
             max_value=500000.0,
-            step=1000.0,
-            key="funded_amnt_inv"
+            value=round(st.session_state.get('dti', 10.0) * ingreso_mensual / 100, 0)
+            if ingreso_mensual > 0 else 0.0,
+            step=100.0,
+            key="deuda_mensual_input",
+            help="Suma todo lo que pagas al mes: tarjetas, crédito de nómina, automotriz, etc."
         )
+        if ingreso_mensual > 0:
+            dti_calculado = round((deuda_mensual / ingreso_mensual) * 100, 1)
+        else:
+            dti_calculado = 0.0
+        st.session_state['dti'] = dti_calculado
 
-        # Total Pagado a Inversionistas
-        total_pymnt_inv = TranslationHelper.create_input_field_with_context(
-            'total_pymnt_inv',
-            st.session_state.get('total_pymnt_inv', 2000.0),
+        if dti_calculado <= 30:
+            st.success(f"DTI(% de Ingresos Comprometidos en Deudas): {dti_calculado:.1f}% — Excelente capacidad de pago")
+        elif dti_calculado <= 40:
+            st.info(f"DTI(% de Ingresos Comprometidos en Deudas): {dti_calculado:.1f}% — Capacidad adecuada")
+        elif dti_calculado <= 50:
+            st.warning(f"DTI(% de Ingresos Comprometidos en Deudas): {dti_calculado:.1f}% — Capacidad limitada")
+        else:
+            st.error(f"DTI(% de Ingresos Comprometidos en Deudas): {dti_calculado:.1f}% — Nivel de deuda muy alto")
+
+    st.markdown("---")
+    st.subheader("💳 Tu crédito y tarjetas")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        limite_total = st.number_input(
+            "¿Cuánto es el límite total de tus tarjetas de crédito? (MXN)",
             min_value=0.0,
-            max_value=1000000.0,
+            max_value=2000000.0,
+            value=10000.0,
             step=1000.0,
-            key="total_pymnt_inv"
+            key="limite_total_input",
+            help="Suma los límites de todas tus tarjetas. Si no tienes tarjeta, deja en 0."
         )
 
     with col2:
-        st.subheader("📈 Otras Características")
-
-        # Total Intereses Recibidos
-        total_rec_int = TranslationHelper.create_input_field_with_context(
-            'total_rec_int',
-            st.session_state.get('total_rec_int', 500.0),
+        deuda_tarjetas = st.number_input(
+            "¿Cuánto debes actualmente en tus tarjetas? (MXN)",
             min_value=0.0,
-            max_value=500000.0,
+            max_value=2000000.0,
+            value=0.0,
+            step=500.0,
+            key="deuda_tarjetas_input",
+            help="El saldo total que debes hoy en todas tus tarjetas."
+        )
+
+    if limite_total > 0:
+        bc_util_calculado = round((deuda_tarjetas / limite_total) * 100, 1)
+    else:
+        bc_util_calculado = 0.0
+    st.session_state['bc_util'] = bc_util_calculado
+
+    if bc_util_calculado <= 30:
+        st.success(f"Uso de crédito: {bc_util_calculado:.1f}% — Buró saludable (ideal menor al 30%)")
+    elif bc_util_calculado <= 50:
+        st.info(f"Uso de crédito: {bc_util_calculado:.1f}% — Uso moderado")
+    elif bc_util_calculado <= 75:
+        st.warning(f"Uso de crédito: {bc_util_calculado:.1f}% — Uso elevado")
+    else:
+        st.error(f"Uso de crédito: {bc_util_calculado:.1f}% — Capacidad comprometida")
+
+    st.markdown("---")
+
+    # -----------------------------------------------------------------------
+    # BLOQUE: EL PRÉSTAMO QUE DESEAS (con tasa de interés visible)
+    # -----------------------------------------------------------------------
+    st.subheader("🏷️ El préstamo que deseas")
+
+    col_loan1, col_loan2 = st.columns(2)
+
+    with col_loan1:
+        monto_prestamo = st.number_input(
+            "💰 ¿Cuánto dinero necesitas? (MXN)",
+            min_value=1000.0,
+            max_value=5000000.0,
+            value=float(st.session_state.get('loan_amount', 20000.0)),
             step=1000.0,
-            key="total_rec_int"
+            key="loan_amount_input",
+            help="El monto total que deseas solicitar."
+        )
+        st.session_state['loan_amount'] = monto_prestamo
+
+    with col_loan2:
+        plazo_meses = st.selectbox(
+            "📅 ¿En cuántos meses pagarías?",
+            options=[6, 9, 12, 18, 24, 36, 48, 60],
+            index=[6, 9, 12, 18, 24, 36, 48, 60].index(st.session_state.get('loan_term', 12)),
+            key="loan_term_select",
+            help="Plazos más largos reducen la mensualidad pero aumentan el interés total."
+        )
+        st.session_state['loan_term'] = plazo_meses
+
+    st.markdown("---")
+
+    # -----------------------------------------------------------------------
+    # TASA DE INTERÉS - CAMPO VISIBLE Y EDITABLE
+    # -----------------------------------------------------------------------
+    st.subheader("📊 Tasa de interés")
+
+    # Calcular tasa sugerida basada en el perfil actual
+    dti_actual = st.session_state.get('dti', 10.0)
+    bc_util_actual = st.session_state.get('bc_util', 15.0)
+    ingreso_mensual_actual = st.session_state.get('annual_inc', 95000) / 12
+    tasa_sugerida = obtener_tasa_estimada(
+        dti_actual, bc_util_actual, ingreso_mensual_actual,
+        monto_prestamo, plazo_meses
+    )
+
+    # Opción para usar tasa sugerida o manual
+    col_rate1, col_rate2 = st.columns([1, 3])
+
+    with col_rate1:
+        usar_sugerida = st.checkbox(
+            "Usar tasa sugerida",
+            value=st.session_state.get('use_suggested_rate', True),
+            key="use_suggested_rate_check",
+            help="El sistema sugiere una tasa según tu perfil de riesgo"
+        )
+        st.session_state.use_suggested_rate = usar_sugerida
+
+    with col_rate2:
+        if usar_sugerida:
+            tasa_anual = tasa_sugerida
+            st.session_state.user_interest_rate = tasa_anual
+            st.info(f"📈 **Tasa sugerida para tu perfil:** {tasa_anual:.1f}% anual")
+
+            # Mostrar tabla de referencia de tasas
+            with st.expander("📊 Referencia de tasas en México"):
+                st.markdown("""
+                | Tipo de crédito | Tasa anual aproximada |
+                |----------------|----------------------|
+                | Hipotecario | 9% - 12% |
+                | Automotriz | 12% - 18% |
+                | Personal (nómina) | 15% - 25% |
+                | Personal (sin nómina) | 25% - 45% |
+                | Tarjeta de crédito | 35% - 65% |
+                | Préstamo de aplicación | 60% - 120% |
+                """)
+        else:
+            tasa_anual = st.number_input(
+                "📉 Tasa de interés anual (%)",
+                min_value=5.0,
+                max_value=80.0,
+                value=float(st.session_state.get('user_interest_rate', 18.0)),
+                step=0.5,
+                key="interest_rate_manual",
+                help="La tasa que te ofrece la institución financiera. En México, las tasas personales suelen estar entre 15% y 45%."
+            )
+            st.session_state.user_interest_rate = tasa_anual
+
+    st.markdown("---")
+
+    # -----------------------------------------------------------------------
+    # CÁLCULOS DEL PRÉSTAMO
+    # -----------------------------------------------------------------------
+    mensualidad_calculada = calcular_mensualidad(monto_prestamo, plazo_meses, tasa_anual)
+    cat_estimado = calcular_cat_estimado(tasa_anual, monto_prestamo, plazo_meses)
+    intereses_totales = calcular_intereses_totales(monto_prestamo, plazo_meses, tasa_anual)
+    total_pagar = monto_prestamo + intereses_totales
+
+    # Mostrar resumen financiero
+    st.subheader("💰 Resumen financiero del préstamo")
+
+    col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+
+    with col_sum1:
+        st.metric(
+            "📆 Mensualidad",
+            f"${mensualidad_calculada:,.2f}",
+            help="Pago mensual que tendrías que hacer"
         )
 
-        # Saldo Liquidación por Dificultad
-        hardship_payoff_balance_amount = TranslationHelper.create_input_field_with_context(
-            'hardship_payoff_balance_amount',
-            st.session_state.get('hardship_payoff_balance_amount', 0.0),
-            min_value=0.0,
-            max_value=500000.0,
-            step=1000.0,
-            key="hardship_payoff_balance_amount"
+    with col_sum2:
+        st.metric(
+            "💸 Intereses totales",
+            f"${intereses_totales:,.2f}",
+            delta=f"{((intereses_totales / monto_prestamo) * 100):.1f}% del monto",
+            delta_color="off"
         )
 
-        # Interés Devengado Proyectado
-        orig_projected_additional_accrued_interest = TranslationHelper.create_input_field_with_context(
-            'orig_projected_additional_accrued_interest',
-            st.session_state.get('orig_projected_additional_accrued_interest', 0.0),
-            min_value=0.0,
-            max_value=100000.0,
-            step=1000.0,
-            key="orig_projected_additional_accrued_interest"
+    with col_sum3:
+        st.metric(
+            "🏦 Total a pagar",
+            f"${total_pagar:,.2f}",
+            help="Monto del préstamo + intereses"
         )
 
-        # Tasa de Interés Anual
-        int_rate = TranslationHelper.create_input_field_with_context(
-            'int_rate',
-            st.session_state.get('int_rate', 6.5),
-            min_value=0.0,
-            max_value=100.0,
-            step=0.1,
-            key="int_rate"
+    with col_sum4:
+        st.metric(
+            "📋 CAT estimado",
+            f"{cat_estimado:.1f}%",
+            help="Costo Anual Total (incluye comisiones estimadas)"
         )
 
-        # Monto por Dificultad Financiera
-        hardship_amount = TranslationHelper.create_input_field_with_context(
-            'hardship_amount',
-            st.session_state.get('hardship_amount', 0.0),
-            min_value=0.0,
-            max_value=500000.0,
-            step=1000.0,
-            key="hardship_amount"
-        )
+    st.markdown("---")
 
-        # Total Recargos por Mora
-        total_rec_late_fee = TranslationHelper.create_input_field_with_context(
-            'total_rec_late_fee',
-            st.session_state.get('total_rec_late_fee', 0.0),
+    # -----------------------------------------------------------------------
+    # MENSUALIDAD QUE EL USUARIO PUEDE PAGAR
+    # -----------------------------------------------------------------------
+    st.subheader("💵 ¿Cuánto puedes pagar al mes?")
+
+    col_pay1, col_pay2 = st.columns(2)
+
+    with col_pay1:
+        mensualidad_deseada = st.number_input(
+            "Mensualidad que puedes pagar cómodamente (MXN)",
             min_value=0.0,
-            max_value=100000.0,
+            max_value=200000.0,
+            value=float(mensualidad_calculada),
             step=100.0,
-            key="total_rec_late_fee"
+            key="installment_input",
+            help="La mensualidad que puedes cubrir sin afectar tus gastos básicos."
         )
+        st.session_state['installment'] = mensualidad_deseada
 
-        # Último Pago por Dificultad
-        hardship_last_payment_amount = TranslationHelper.create_input_field_with_context(
-            'hardship_last_payment_amount',
-            st.session_state.get('hardship_last_payment_amount', 0.0),
-            min_value=0.0,
-            max_value=100000.0,
-            step=1000.0,
-            key="hardship_last_payment_amount"
-        )
+    with col_pay2:
+        porcentaje_ingreso = (mensualidad_deseada / ingreso_mensual * 100) if ingreso_mensual > 0 else 0
 
-        # Relación Deuda/Ingreso (DTI)
-        dti = TranslationHelper.create_input_field_with_context(
-            'dti',
-            st.session_state.get('dti', 10.0),
-            min_value=0.0,
-            max_value=100.0,
-            step=0.1,
-            key="dti"
-        )
-
-        # Ingreso Anual Bruto
-        annual_inc = TranslationHelper.create_input_field_with_context(
-            'annual_inc',
-            st.session_state.get('annual_inc', 95000.0),
-            min_value=0.0,
-            max_value=10000000.0,
-            step=1000.0,
-            key="annual_inc"
-        )
-
-        # Utilización de Crédito (Buró)
-        bc_util = TranslationHelper.create_input_field_with_context(
-            'bc_util',
-            st.session_state.get('bc_util', 15.0),
-            min_value=0.0,
-            max_value=100.0,
-            step=0.1,
-            key="bc_util"
-        )
-
-    # Sección de resumen con contexto mexicano
-    st.markdown("---")
-    st.subheader("📋 Resumen del Perfil - Análisis Mexicano")
-
-    # Crear columnas para resumen
-    summary_col1, summary_col2, summary_col3 = st.columns(3)
-
-    with summary_col1:
-        # Evaluación DTI
-        dti_value = st.session_state.get('dti', 0)
-        if dti_value <= 30:
-            dti_status = "🟢 Excelente"
-            dti_color = "green"
-        elif dti_value <= 40:
-            dti_status = "🟡 Adecuado"
-            dti_color = "orange"
-        elif dti_value <= 50:
-            dti_status = "🟠 Limitado"
-            dti_color = "darkorange"
-        else:
-            dti_status = "🔴 Alto Riesgo"
-            dti_color = "red"
-
-        st.metric(
-            "📊 Relación DTI",
-            f"{dti_value:.1f}%",
-            delta=dti_status,
-            delta_color="off"
-        )
-
-        # Barra de progreso DTI
-        st.progress(
-            min(dti_value / 100, 1.0),
-            text=f"Límite recomendado en México: 40%"
-        )
-
-    with summary_col2:
-        # Evaluación Ingreso
-        annual_inc_value = st.session_state.get('annual_inc', 0)
-        monthly_inc = annual_inc_value / 12
-
-        if monthly_inc >= 45000:
-            inc_status = "🟢 Alto"
-        elif monthly_inc >= 25000:
-            inc_status = "🟡 Medio-Alto"
-        elif monthly_inc >= 12000:
-            inc_status = "🟠 Medio"
-        else:
-            inc_status = "🔴 Bajo"
-
-        st.metric(
-            "💰 Ingreso Mensual",
-            f"${monthly_inc:,.0f} MXN",
-            delta=inc_status,
-            delta_color="off"
-        )
-
-        # Comparación con salario mínimo
-        min_wage = 7486  # Salario mínimo mensual 2024
-        if monthly_inc > 0:
-            times_min_wage = monthly_inc / min_wage
-            st.caption(f"Equivale a {times_min_wage:.1f} veces el salario mínimo")
-
-    with summary_col3:
-        # Evaluación Utilización Crédito
-        bc_util_value = st.session_state.get('bc_util', 0)
-
-        if bc_util_value <= 30:
-            util_status = "🟢 Excelente"
-        elif bc_util_value <= 50:
-            util_status = "🟡 Adecuado"
-        elif bc_util_value <= 75:
-            util_status = "🟠 Alto"
-        else:
-            util_status = "🔴 Muy Alto"
-
-        st.metric(
-            "💳 Utilización Crédito",
-            f"{bc_util_value:.1f}%",
-            delta=util_status,
-            delta_color="off"
-        )
-
-        # Recomendación Buró de Crédito
-        if bc_util_value > 50:
-            st.warning("⚠️ Alta utilización puede afectar score Buró")
-        else:
-            st.success("✅ Nivel saludable según Buró de Crédito")
-
-    # Información sobre perfiles con contexto mexicano
-    with st.expander("📋 Guía de Perfiles - Contexto Mexicano", expanded=False):
-        st.markdown("""
-        ### 🎯 Perfiles de Ejemplo Adaptados a México
-
-        **🟢 RIESGO MÍNIMO (0-20%):**
-        - **Perfil:** Cliente premium (ejecutivo, profesionista)
-        - **Ingreso:** >$100,000 mensuales
-        - **DTI:** <30% (excelente capacidad de pago)
-        - **Buró:** Utilización <30%, historial impecable
-        - **Contexto mexicano:** Ingresos formales, declaración fiscal al día
-
-        **🟡 RIESGO BAJO (20-40%):**
-        - **Perfil:** Cliente sólido (empleado formal, pequeño empresario)
-        - **Ingreso:** $25,000 - $100,000 mensuales
-        - **DTI:** 30-40% (capacidad adecuada)
-        - **Buró:** Utilización 30-50%, historial bueno
-        - **Contexto mexicano:** Contrato indefinido, antigüedad laboral >2 años
-
-        **🔴 RIESGO ALTO (40-60%):**
-        - **Perfil:** Cliente de alto riesgo (ingresos variables, sector informal)
-        - **Ingreso:** <$25,000 mensuales
-        - **DTI:** >40% (sobreendeudamiento)
-        - **Buró:** Utilización >75%, morosidades
-        - **Contexto mexicano:** Ingresos informales, sin comprobantes fiscales
-
-        **⚠️ CONSIDERACIONES ESPECÍFICAS MÉXICO:**
-        - **Sector informal:** Representa ~55% de la economía
-        - **Ingresos variables:** Comisiones, ventas, trabajos por proyecto
-        - **Compensación:** Garantías, avales, seguros de crédito
-        - **Regulación:** Límites de usura (CAT máximo no regulado explícitamente)
-        """)
-
-        # Tabla comparativa con contexto mexicano
-        comparison_data = {
-            "Indicador": ["DTI Recomendado", "Utilización Buró Ideal", "Antigüedad Laboral Mínima",
-                          "Ingreso Mínimo Formal"],
-            "Valor": ["< 40%", "< 50%", "6 meses - 1 año", "3x Salario Mínimo"],
-            "Observaciones MX": ["Límite prudencial bancario", "Impacta score Buró", "Estabilidad laboral valorada",
-                                 "~$22,400 mensuales"]
-        }
-
-        import pandas as pd
-        st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
-
-    st.markdown("---")
-
-    # Botón de predicción
-    if st.button("🎯 Realizar Predicción de Riesgo", type="primary", use_container_width=True, key="predict_button"):
-        with st.spinner("Analizando perfil crediticio..."):
-            # Recopilar datos actuales del formulario
-            input_data = {
-                'out_prncp': out_prncp,
-                'out_prncp_inv': out_prncp_inv,
-                'last_pymnt_amnt': last_pymnt_amnt,
-                'total_rec_prncp': total_rec_prncp,
-                'recoveries': recoveries,
-                'collection_recovery_fee': collection_recovery_fee,
-                'total_pymnt': total_pymnt,
-                'installment': installment,
-                'funded_amnt_inv': funded_amnt_inv,
-                'total_pymnt_inv': total_pymnt_inv,
-                'total_rec_int': total_rec_int,
-                'hardship_payoff_balance_amount': hardship_payoff_balance_amount,
-                'orig_projected_additional_accrued_interest': orig_projected_additional_accrued_interest,
-                'int_rate': int_rate,
-                'hardship_amount': hardship_amount,
-                'total_rec_late_fee': total_rec_late_fee,
-                'hardship_last_payment_amount': hardship_last_payment_amount,
-                'dti': dti,
-                'annual_inc': annual_inc,
-                'bc_util': bc_util
-            }
-
-            # Validar y hacer predicción
-            input_data, errors = prediction_manager.validate_input(input_data)
-
-            if errors:
-                for error in errors:
-                    st.error(error)
+        if mensualidad_deseada > 0:
+            if mensualidad_deseada >= mensualidad_calculada:
+                st.success(f"✅ Puedes pagar la mensualidad requerida (${mensualidad_calculada:,.2f})")
             else:
+                faltante = mensualidad_calculada - mensualidad_deseada
+                st.warning(f"⚠️ Te faltan ${faltante:,.2f} mensuales para cubrir el préstamo")
+
+            if porcentaje_ingreso <= 30:
+                st.success(f"Representa el {porcentaje_ingreso:.1f}% de tu ingreso — Excelente")
+            elif porcentaje_ingreso <= 40:
+                st.info(f"Representa el {porcentaje_ingreso:.1f}% de tu ingreso — Adecuado")
+            else:
+                st.warning(f"⚠️ Representa el {porcentaje_ingreso:.1f}% de tu ingreso — Alto")
+
+    # -----------------------------------------------------------------------
+    # BLOQUE 2 — HISTORIAL PREVIO (condicional)
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📋 ¿Tienes créditos o préstamos anteriores?")
+
+    tiene_historial = st.radio(
+        "¿Has tenido algún préstamo, crédito de nómina o financiamiento antes?",
+        options=["No, es mi primer crédito", "Sí, tengo o tuve créditos antes"],
+        index=1 if st.session_state.get('tiene_historial', False) else 0,
+        key="tiene_historial_radio",
+        horizontal=True
+    )
+    st.session_state['tiene_historial'] = (tiene_historial == "Sí, tengo o tuve créditos antes")
+
+    if st.session_state['tiene_historial']:
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            saldo_pendiente = st.number_input(
+                "¿Cuánto debes todavía de capital en ese crédito? (MXN)",
+                min_value=0.0,
+                max_value=5000000.0,
+                value=float(st.session_state.get('out_prncp', 0.0)),
+                step=1000.0,
+                key="out_prncp_input",
+                help="Solo el capital, sin contar intereses."
+            )
+            st.session_state['out_prncp'] = saldo_pendiente
+
+        with col2:
+            ultimo_pago = st.number_input(
+                "¿Cuánto fue tu último pago a ese crédito? (MXN)",
+                min_value=0.0,
+                max_value=500000.0,
+                value=float(st.session_state.get('last_pymnt_amnt', 0.0)),
+                step=100.0,
+                key="last_pymnt_amnt_input"
+            )
+            st.session_state['last_pymnt_amnt'] = ultimo_pago
+
+        st.markdown("---")
+        tuvo_cobranza = st.radio(
+            "¿Alguna vez un banco o financiera tuvo que recurrir a cobranza?",
+            options=[
+                "No, siempre he pagado a tiempo",
+                "Sí, hubo algún proceso de cobranza"
+            ],
+            index=1 if st.session_state.get('tuvo_cobranza', False) else 0,
+            key="tuvo_cobranza_radio",
+            horizontal=True
+        )
+        st.session_state['tuvo_cobranza'] = (tuvo_cobranza == "Sí, hubo algún proceso de cobranza")
+
+        if st.session_state['tuvo_cobranza']:
+            monto_cobranza = st.number_input(
+                "¿Aproximadamente cuánto dinero recuperaron por esa cobranza? (MXN)",
+                min_value=0.0,
+                max_value=500000.0,
+                value=float(st.session_state.get('recoveries', 0.0)),
+                step=500.0,
+                key="recoveries_input"
+            )
+            st.session_state['recoveries'] = monto_cobranza
+        else:
+            st.session_state['recoveries'] = 0.0
+
+    else:
+        st.session_state['out_prncp'] = 0.0
+        st.session_state['last_pymnt_amnt'] = 0.0
+        st.session_state['recoveries'] = 0.0
+        st.session_state['tuvo_cobranza'] = False
+        st.info("✅ Al ser tu primer crédito, el sistema usará valores base para el análisis.")
+
+    # -----------------------------------------------------------------------
+    # RESUMEN ANTES DE PREDECIR
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📋 Resumen de tu perfil")
+
+    rc1, rc2, rc3, rc4 = st.columns(4)
+    with rc1:
+        ev_dti = evaluate_factor('dti', st.session_state.get('dti', 0))
+        st.metric(
+            "Deudas vs. ingresos",
+            f"{st.session_state.get('dti', 0):.1f}%",
+            delta=f"{ev_dti['icon']} {ev_dti['text']}",
+            delta_color="off"
+        )
+    with rc2:
+        monthly_inc = st.session_state.get('annual_inc', 0) / 12
+        ev_inc = evaluate_factor('annual_inc', st.session_state.get('annual_inc', 0))
+        st.metric(
+            "Ingreso mensual",
+            f"${monthly_inc:,.0f}",
+            delta=f"{ev_inc['icon']} {ev_inc['text']}",
+            delta_color="off"
+        )
+    with rc3:
+        ev_bcu = evaluate_factor('bc_util', st.session_state.get('bc_util', 0))
+        st.metric(
+            "Uso de crédito",
+            f"{st.session_state.get('bc_util', 0):.1f}%",
+            delta=f"{ev_bcu['icon']} {ev_bcu['text']}",
+            delta_color="off"
+        )
+    with rc4:
+        ev_rate = evaluate_factor('int_rate', tasa_anual)
+        st.metric(
+            "Tasa interés",
+            f"{tasa_anual:.1f}%",
+            delta=f"{ev_rate['icon']} {ev_rate['text']}",
+            delta_color="off"
+        )
+
+    # Resumen del préstamo
+    st.markdown("---")
+    col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+    with col_res1:
+        st.metric("💰 Monto solicitado", f"${monto_prestamo:,.0f}")
+    with col_res2:
+        st.metric("📅 Plazo", f"{plazo_meses} meses")
+    with col_res3:
+        st.metric("💵 Mensualidad", f"${mensualidad_deseada:,.0f}")
+    with col_res4:
+        st.metric("📊 Tasa", f"{tasa_anual:.1f}%")
+
+    # -----------------------------------------------------------------------
+    # BOTÓN DE PREDICCIÓN
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    if st.button("🎯 Analizar mi solicitud", type="primary", use_container_width=True):
+
+        # Validaciones
+        if monto_prestamo <= 0:
+            st.error("❌ Por favor ingresa un monto de préstamo válido")
+            return
+        if plazo_meses <= 0:
+            st.error("❌ Por favor selecciona un plazo válido")
+            return
+        if mensualidad_deseada <= 0:
+            st.error("❌ Por favor ingresa la mensualidad que puedes pagar")
+            return
+
+        # Inyectar campos ocultos derivados
+        inject_hidden_fields()
+
+        # Construir input_data con los 20 campos
+        input_data = {k: float(st.session_state.get(k, 0.0)) for k in FEATURE_KEYS}
+
+        input_data, errors = prediction_manager.validate_input(input_data)
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            with st.spinner("Analizando tu solicitud..."):
                 results = prediction_manager.predict(input_data)
 
-                if results:
-                    # Mostrar resultados
-                    st.markdown("## 🎯 Resultado del Análisis Crediticio")
+            if results:
+                show_results(results, input_data, monto_prestamo, plazo_meses, tasa_anual)
 
-                    col1, col2 = st.columns([2, 1])
 
-                    with col1:
-                        # Gráfico de resultados
-                        fig = viz_manager.plot_prediction_result(
-                            results['probability'],
-                            results['decision'],
-                            results['risk_level']
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
+# ---------------------------------------------------------------------------
+# MOSTRAR RESULTADOS
+# ---------------------------------------------------------------------------
 
-                        # Añadir gráfico de comparación mexicana
-                        fig_mx = viz_manager.plot_profile_comparison_mx(input_data)
-                        if fig_mx:
-                            st.plotly_chart(fig_mx, use_container_width=True)
+def show_results(results, input_data, loan_amount, loan_term, interest_rate):
+    st.markdown("---")
+    st.markdown("## Resultado de tu análisis")
 
-                    with col2:
-                        # Información detallada con contexto mexicano
-                        decision_color = "green" if results['decision'] == "APROBADO" else "red"
+    decision = results['decision']
+    prob = results['probability']
+    risk_level = results['risk_level']
+    profile_score = results['profile_score']
 
-                        st.markdown(
-                            f"### <span style='color:{decision_color}; font-size: 24px;'>{results['decision']}</span>",
-                            unsafe_allow_html=True)
+    # Encabezado de resultado
+    if decision == "APROBADO":
+        st.success(f"### ✅ Tu solicitud tiene buenas posibilidades de aprobarse")
+    else:
+        st.error(f"### ❌ Tu solicitud presenta factores de riesgo elevado")
 
-                        st.metric(
-                            "Probabilidad de Riesgo",
-                            f"{results['probability']:.1%}",
-                            delta=f"Umbral: {results['threshold']:.1%}",
-                            delta_color="off"
-                        )
+    col_res1, col_res2 = st.columns([2, 1])
 
-                        st.metric(
-                            "Nivel de Riesgo",
-                            results['risk_level']
-                        )
+    with col_res1:
+        fig = viz_manager.plot_prediction_result(prob, decision, risk_level)
+        st.plotly_chart(fig, use_container_width=True)
 
-                        st.metric(
-                            "Score de Perfil",
-                            f"{results['profile_score']:.0f}/100"
-                        )
+    with col_res2:
+        st.metric("Nivel de riesgo", risk_level)
+        st.metric("Puntuación de perfil", f"{profile_score:.0f} / 100")
+        st.metric("Probabilidad de riesgo", f"{prob:.1%}")
+        st.caption(f"Umbral de decisión: {results['threshold']:.0%}")
 
-                        # Interpretación mexicana
-                        st.markdown("---")
-                        st.subheader("🇲🇽 Interpretación Local")
+    # Mostrar resumen del préstamo en resultados
+    st.markdown("---")
+    st.subheader("📋 Resumen de tu solicitud")
 
-                        if results['decision'] == "APROBADO":
-                            st.success("""
-                            **✅ Aprobación Recomendada:**
-                            - Perfil alineado con estándares mexicanos
-                            - Capacidad de pago verificable
-                            - Riesgo dentro de parámetros aceptables
-                            """)
-                        else:
-                            st.error("""
-                            **❌ Rechazo Recomendado:**
-                            - Perfil fuera de parámetros prudenciales
-                            - Riesgo crediticio elevado
-                            - Considerar garantías adicionales
-                            """)
+    col_loan_r1, col_loan_r2, col_loan_r3, col_loan_r4 = st.columns(4)
+    with col_loan_r1:
+        st.metric("💰 Monto", f"${loan_amount:,.0f}")
+    with col_loan_r2:
+        st.metric("📅 Plazo", f"{loan_term} meses")
+    with col_loan_r3:
+        mensualidad_calc = calcular_mensualidad(loan_amount, loan_term, interest_rate)
+        st.metric("💵 Mensualidad requerida", f"${mensualidad_calc:,.0f}")
+    with col_loan_r4:
+        st.metric("📊 Tasa de interés", f"{interest_rate:.1f}%")
 
-                    # Guardar en base de datos
-                    user = auth_manager.get_current_user()
-                    prediction_id = db_manager.save_prediction(
-                        user['id'],
-                        input_data,
-                        results
-                    )
+    # -----------------------------------------------------------------------
+    # EXPLICACIÓN DETALLADA
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🔍 ¿Por qué obtuve este resultado?")
 
-                    if prediction_id:
-                        st.success(f"✅ Análisis guardado con ID: {prediction_id}")
+    factores_visibles = [
+        ('dti', "Proporción de tus deudas vs. ingresos"),
+        ('annual_inc', "Tus ingresos anuales"),
+        ('bc_util', "Qué tanto usas tu crédito disponible"),
+        ('int_rate', "Tasa de interés del préstamo"),
+        ('out_prncp', "Saldo que aún debes de créditos anteriores"),
+        ('last_pymnt_amnt', "Tu último pago registrado"),
+        ('recoveries', "Historial de cobranza"),
+    ]
 
-                    # Información de diagnóstico con contexto mexicano
-                    st.markdown("---")
-                    st.subheader("🔍 Diagnóstico Detallado - Perspectiva Mexicana")
+    cols_factores = st.columns(3)
+    for i, (campo, etiqueta) in enumerate(factores_visibles):
+        valor = input_data.get(campo, 0)
+        ev = evaluate_factor(campo, valor)
+        color_map = {'good': 'normal', 'medium': 'off', 'bad': 'inverse', 'neutral': 'normal'}
+        with cols_factores[i % 3]:
+            if any(kw in campo for kw in ['amnt', 'inc', 'prncp', 'pymnt', 'recovery']):
+                valor_fmt = f"${valor:,.0f}"
+            elif any(kw in campo for kw in ['rate', 'util', 'dti']):
+                valor_fmt = f"{valor:.1f}%"
+            else:
+                valor_fmt = f"{valor:,.2f}"
+            st.metric(
+                etiqueta,
+                valor_fmt,
+                delta=f"{ev['icon']} {ev['text']}",
+                delta_color=color_map[ev['status']]
+            )
 
-                    # Mostrar información del modelo
-                    col1, col2, col3 = st.columns(3)
+    # -----------------------------------------------------------------------
+    # EXPLICACIÓN NARRATIVA
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("💡 ¿Qué significa esto para ti?")
 
-                    with col1:
-                        st.info(f"**Modelo:** {model_info.get('type', 'N/A')}")
+    if prob < 0.2:
+        st.markdown("""
+        **Tu perfil financiero es muy sólido.** Tienes buena capacidad de pago, tus deudas
+        son manejables y tu historial crediticio es positivo.
 
-                    with col2:
-                        st.info(f"**Umbral usado:** {results['threshold']:.1%}")
+        **La tasa de interés** que se te podría ofrecer estaría en el rango bajo del mercado.
+        """)
+    elif prob < 0.4:
+        st.markdown("""
+        **Tu perfil es estable y dentro de los parámetros normales.** Tienes capacidad de
+        pago, aunque hay algunas áreas de oportunidad.
 
-                    with col3:
-                        st.info(f"**Predicción raw:** {results.get('prediction_raw', 'N/A')}")
+        **La tasa de interés** dependerá de la institución, pero estaría en rangos estándar.
+        """)
+    else:
+        st.markdown("""
+        **Tu perfil presenta factores que incrementan el riesgo.** Esto puede deberse a un
+        nivel alto de deudas, historial de cobranza o ingreso insuficiente.
 
-                    # Verificar coherencia con perfil esperado
-                    if st.session_state.get('current_profile') in PROFILES:
-                        profile = PROFILES[st.session_state.current_profile]
-                        expected_result = profile.get('expected_result', 'N/A')
-                        expected_prob = profile.get('expected_probability', 'N/A')
+        **La tasa de interés** probablemente sería alta. Considera:
+        - Solicitar un monto menor
+        - Buscar un aval
+        - Mejorar tu historial antes de solicitar
+        """)
 
-                        if expected_result != 'N/A':
-                            st.markdown(f"**Resultado esperado para este perfil:** {expected_result} ({expected_prob})")
+    # Factores específicos
+    factores_negativos = []
+    if input_data.get('dti', 0) > 40:
+        factores_negativos.append("Tu nivel de deudas es alto en relación a tu ingreso (DTI > 40%)")
+    if input_data.get('bc_util', 0) > 75:
+        factores_negativos.append("Estás usando más del 75% de tu crédito disponible")
+    if input_data.get('recoveries', 0) > 0:
+        factores_negativos.append("Tienes historial de cobranza registrado")
+    if input_data.get('out_prncp', 0) > 5000:
+        factores_negativos.append("Aún tienes un saldo importante de capital por pagar")
+    if interest_rate > 35:
+        factores_negativos.append(
+            f"La tasa de interés es alta ({interest_rate:.1f}%) — esto aumenta el riesgo de impago")
 
-                            if results['decision'] == expected_result:
-                                st.success("✅ Resultado coherente con el perfil")
-                            else:
-                                st.warning("⚠️ Resultado diferente al esperado para este perfil")
+    if factores_negativos:
+        with st.expander("⚠️ Factores que más influyeron en tu resultado"):
+            for f in factores_negativos:
+                st.markdown(f"- {f}")
 
-                                # Sugerir ajuste de umbral con contexto mexicano
-                                if results['decision'] == "RECHAZADO" and expected_result == "APROBADO":
-                                    suggested_threshold = max(0.1, results['probability'] - 0.05)
-                                    st.markdown(
-                                        f"**Sugerencia:** Para aprobar este perfil en contexto mexicano, reduce el umbral a **{suggested_threshold:.1%}** o menos")
-                                elif results['decision'] == "APROBADO" and expected_result == "RECHAZADO":
-                                    suggested_threshold = min(0.9, results['probability'] + 0.05)
-                                    st.markdown(
-                                        f"**Sugerencia:** Para rechazar este perfil considerando estándares mexicanos, aumenta el umbral a **{suggested_threshold:.1%}** o más")
+    # -----------------------------------------------------------------------
+    # GUARDAR EN BASE DE DATOS
+    # -----------------------------------------------------------------------
+    user = auth_manager.get_current_user()
+    prediction_id = db_manager.save_prediction(user['id'], input_data, results)
+    if prediction_id:
+        st.caption(f"Análisis guardado — ID: {prediction_id}")
 
-                    # Mostrar análisis de factores con perspectiva mexicana
-                    st.markdown("---")
-                    st.subheader("📊 Análisis de Factores Clave - Contexto Mexicano")
+    # Detalles técnicos opcionales
+    with st.expander("🔧 Ver datos técnicos completos del análisis"):
+        st.json(results)
+        st.subheader("Valores procesados por el modelo")
+        df_vals = pd.DataFrame([
+            {
+                'Campo técnico': k,
+                'Valor': f"${v:,.2f}" if any(
+                    kw in k for kw in ['amnt', 'inc', 'prncp', 'pymnt', 'recovery', 'fee', 'balance']) else f"{v:.2f}",
+                'Impacto': '🔴 Alto' if k in ['recoveries', 'out_prncp', 'last_pymnt_amnt', 'dti', 'annual_inc',
+                                             'int_rate'] else '🟡 Medio' if k in ['bc_util', 'total_pymnt',
+                                                                                 'installment'] else '⚪ Bajo'
+            }
+            for k, v in input_data.items()
+        ])
+        st.dataframe(df_vals, use_container_width=True, hide_index=True)
 
-                    # Función para evaluar factores en contexto mexicano
-                    def evaluate_factor_mx(factor, value):
-                        """Evaluar un factor individual en contexto mexicano"""
-                        if factor == 'out_prncp':
-                            if value == 0:
-                                return {'status': 'good', 'text': 'Excelente - Sin deuda', 'icon': '✅'}
-                            elif value < 10000:
-                                return {'status': 'good', 'text': 'Bajo - Buen manejo', 'icon': '👍'}
-                            elif value < 50000:
-                                return {'status': 'medium', 'text': 'Moderado - Vigilar', 'icon': '⚠️'}
-                            else:
-                                return {'status': 'bad', 'text': 'Alto - Sobreendeudamiento', 'icon': '❌'}
 
-                        elif factor == 'dti':
-                            if value < 30:
-                                return {'status': 'good', 'text': 'Excelente - Capacidad sobrada', 'icon': '✅'}
-                            elif value < 40:
-                                return {'status': 'good', 'text': 'Adecuado - Límite prudencial', 'icon': '👍'}
-                            elif value < 50:
-                                return {'status': 'medium', 'text': 'Alto - Riesgo moderado', 'icon': '⚠️'}
-                            else:
-                                return {'status': 'bad', 'text': 'Muy Alto - Sobreendeudamiento', 'icon': '❌'}
-
-                        elif factor == 'int_rate':
-                            if value < 15:
-                                return {'status': 'good', 'text': 'Muy Baja - Excelente', 'icon': '✅'}
-                            elif value < 25:
-                                return {'status': 'good', 'text': 'Baja - Competitiva', 'icon': '👍'}
-                            elif value < 40:
-                                return {'status': 'medium', 'text': 'Media - Estándar mercado', 'icon': '⚠️'}
-                            else:
-                                return {'status': 'bad', 'text': 'Muy Alta - Riesgo usura', 'icon': '❌'}
-
-                        elif factor == 'bc_util':
-                            if value < 30:
-                                return {'status': 'good', 'text': 'Excelente - Buró saludable', 'icon': '✅'}
-                            elif value < 50:
-                                return {'status': 'good', 'text': 'Adecuado - Buen manejo', 'icon': '👍'}
-                            elif value < 75:
-                                return {'status': 'medium', 'text': 'Alto - Vigilar uso', 'icon': '⚠️'}
-                            else:
-                                return {'status': 'bad', 'text': 'Muy Alto - Capacidad comprometida', 'icon': '❌'}
-
-                        elif factor == 'annual_inc':
-                            monthly = value / 12
-                            if monthly >= 45000:
-                                return {'status': 'good', 'text': 'Alto - Clase media alta', 'icon': '✅'}
-                            elif monthly >= 25000:
-                                return {'status': 'good', 'text': 'Medio - Clase media', 'icon': '👍'}
-                            elif monthly >= 12000:
-                                return {'status': 'medium', 'text': 'Básico - Salario promedio', 'icon': '⚠️'}
-                            else:
-                                return {'status': 'bad', 'text': 'Bajo - Subsistencia', 'icon': '❌'}
-
-                        elif factor == 'last_pymnt_amnt':
-                            if value == 0:
-                                return {'status': 'bad', 'text': 'Crítico - Sin pago reciente', 'icon': '❌'}
-                            elif value < 500:
-                                return {'status': 'medium', 'text': 'Bajo - Pago mínimo', 'icon': '⚠️'}
-                            elif value < 2000:
-                                return {'status': 'good', 'text': 'Adecuado - Pago regular', 'icon': '👍'}
-                            else:
-                                return {'status': 'good', 'text': 'Alto - Excelente pago', 'icon': '✅'}
-
-                        else:
-                            return {'status': 'neutral', 'text': 'Normal - Sin observaciones', 'icon': '📝'}
-
-                    # Factores clave con valores y evaluación mexicana
-                    key_factors = [
-                        ('out_prncp', 'Saldo Capital Pendiente', True, '💰'),
-                        ('dti', 'Relación DTI', False, '📊'),
-                        ('int_rate', 'Tasa de Interés', False, '📈'),
-                        ('bc_util', 'Utilización Crédito', False, '💳'),
-                        ('annual_inc', 'Ingreso Anual', True, '🏦'),
-                        ('last_pymnt_amnt', 'Último Pago', True, '📅')
-                    ]
-
-                    cols = st.columns(3)
-                    for i, (factor, label, is_money, icon) in enumerate(key_factors):
-                        if factor in input_data:
-                            with cols[i % 3]:
-                                value = input_data[factor]
-                                formatted_value = TranslationHelper.format_currency_mx(value, factor)
-
-                                # Evaluación mexicana
-                                evaluation = evaluate_factor_mx(factor, value)
-                                color_map = {
-                                    'good': "normal",
-                                    'medium': "off",
-                                    'bad': "inverse",
-                                    'neutral': "normal"
-                                }
-
-                                st.metric(
-                                    f"{icon} {label}",
-                                    formatted_value,
-                                    delta=f"{evaluation['icon']} {evaluation['text']}",
-                                    delta_color=color_map[evaluation['status']]
-                                )
-
-                    # Mostrar detalles completos
-                    with st.expander("📋 Ver detalles completos del análisis"):
-                        st.json(results)
-
-                        # Tabla de todos los valores con nombres mexicanos
-                        st.subheader("Valores ingresados - Contexto Mexicano")
-                        import pandas as pd
-
-                        df_values = pd.DataFrame([
-                            {
-                                'Característica': TranslationHelper.translate_feature(k),
-                                'Variable Original': k,
-                                'Valor': TranslationHelper.format_currency_mx(v, k),
-                                'Evaluación MX': evaluate_factor_mx(k, v)['text'],
-                                'Estado': evaluate_factor_mx(k, v)['icon']
-                            }
-                            for k, v in input_data.items()
-                        ])
-                        st.dataframe(df_values, use_container_width=True, hide_index=True)
-
-                        # Explicación del resultado en contexto mexicano
-                        st.subheader("💡 Interpretación del Resultado - Perspectiva Mexicana")
-
-                        if results['probability'] < 0.2:
-                            st.markdown("""
-                            **🟢 RIESGO MÍNIMO (0-20%):**
-                            - **Perfil mexicano:** Cliente premium, ingresos formales altos
-                            - **Documentación:** Comprobantes fiscales completos, historial Buró impecable
-                            - **Recomendación:** Aprobación automática, condiciones preferenciales
-                            - **Consideraciones MX:** Ideal para tarjetas platinum, créditos hipotecarios
-                            """)
-                        elif results['probability'] < 0.4:
-                            st.markdown("""
-                            **🟡 RIESGO BAJO (20-40%):**
-                            - **Perfil mexicano:** Cliente formal estable, empleado o pequeño empresario
-                            - **Documentación:** Nóminas, contratos, declaraciones al día
-                            - **Recomendación:** Aprobación estándar, revisión de capacidad
-                            - **Consideraciones MX:** Mercado objetivo principal de la banca comercial
-                            """)
-                        else:  # probability >= 0.4
-                            st.markdown("""
-                            **🔴 RIESGO ALTO (40-100%):**
-                            - **Perfil mexicano:** Sector informal, ingresos variables, historial problemático
-                            - **Documentación:** Limitada o irregular, posiblemente sin comprobantes fiscales
-                            - **Recomendación:** Rechazo o condiciones especiales (garantías, avales, tasas más altas)
-                            - **Consideraciones MX:** Mercado de microcrédito, fintechs, créditos con garantía
-                            - **Alternativas MX:** Considerar Sofomes, Uniones de Crédito, programas gubernamentales
-                            """)
-
-                        # Recomendaciones específicas para México
-                        st.subheader("🤝 Recomendaciones - Estrategia Mexicana")
-
-                        if results['decision'] == "APROBADO":
-                            st.success("""
-                            **Estrategia de Aprobación:**
-                            1. **Oferta estándar:** Tasas competitivas del mercado
-                            2. **Cross-selling:** Seguros, tarjetas adicionales
-                            3. **Límites prudentes:** Basados en capacidad comprobada
-                            4. **Seguimiento:** Monitoreo periódico del Buró
-                            """)
-                        else:
-                            st.warning("""
-                            **Estrategia Alternativa (si desea proceder):**
-                            1. **Garantías adicionales:** Avales con buen historial, garantías prendarias
-                            2. **Seguros:** De vida, desempleo, incapacidad
-                            3. **Tasas ajustadas:** Primas de riesgo justificadas
-                            4. **Plazos cortos:** Reducción de exposición
-                            5. **Programas especiales:** Reestructuración, pagos graduales
-
-                            **Instituciones alternativas en México:**
-                            • **Sofomes:** Sociedades Financieras de Objeto Múltiple
-                            • **Sofipos:** Sociedades Financieras Populares
-                            • **Uniones de Crédito:** Cooperativas de ahorro y préstamo
-                            • **Programas gubernamentales:** Nacional Financiera, Fondos de garantía
-                            """)
-
+# ---------------------------------------------------------------------------
+# PÁGINA DE ANÁLISIS
+# ---------------------------------------------------------------------------
 
 def show_analysis_page():
-    """Mostrar página de análisis"""
-    st.title("📈 Análisis de Predicción")
+    st.title("📈 Análisis de mi última simulación")
     st.markdown("---")
 
-    # Verificar si hay predicciones recientes
     user = auth_manager.get_current_user()
     predictions = db_manager.get_user_predictions(user['id'], limit=1)
 
     if predictions.empty:
-        st.info("ℹ️ Realice una predicción primero para ver los análisis")
+        st.info("ℹ️ Realiza una simulación primero para ver el análisis aquí.")
         return
 
-    # Obtener última predicción
-    last_prediction = predictions.iloc[0]
-
-    # Obtener detalles completos
-    details = db_manager.get_prediction_details(last_prediction['id'], user['id'])
+    last_pred = predictions.iloc[0]
+    details = db_manager.get_prediction_details(last_pred['id'], user['id'])
 
     if not details:
-        st.error("❌ No se pudieron obtener los detalles de la predicción")
+        st.error("❌ No se pudieron obtener los detalles")
         return
 
-    # Convertir detalles JSON
     try:
         details_json = json.loads(details['details_json'])
         input_data = details_json.get('feature_values', {})
-    except:
+    except Exception:
         input_data = {}
 
-    # Mostrar análisis en pestañas
-    tab1, tab2, tab3 = st.tabs(["📊 Factores Clave", "📈 Comparación", "🔍 Explicación"])
+    tab1, tab2, tab3 = st.tabs(["📊 Factores clave", "📈 Comparación", "🔍 Cómo funciona el modelo"])
 
     with tab1:
-        # Importancia de características
         model_info = prediction_manager.get_model_info()
         feature_importance = model_info.get('feature_importance', {})
-
         if feature_importance:
             fig = viz_manager.plot_feature_importance(feature_importance)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("ℹ️ No hay información de importancia de características disponible")
+            st.info("ℹ️ No hay importancia de características disponible en este modelo.")
 
     with tab2:
-        # Comparación con referencias
         if input_data:
             fig = viz_manager.plot_profile_comparison(input_data)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
 
-            # Tabla de valores
-            st.subheader("Valores Ingresados")
-            df_display = pd.DataFrame([{
-                'Característica': viz_manager.get_friendly_name(k),
-                'Valor': f"${v:,.2f}" if any(
-                    keyword in k for keyword in ['amnt', 'inc', 'prncp', 'pymnt', 'recovery', 'fee', 'balance'])
-                else f"{v:.1f}%" if any(keyword in k for keyword in ['rate', 'util', 'dti'])
-                else f"{v:.2f}"
-            } for k, v in input_data.items()])
-
-            st.dataframe(df_display, use_container_width=True)
+            etiquetas = {
+                'dti': '% de ingresos en deudas',
+                'annual_inc': 'Ingresos anuales',
+                'bc_util': 'Uso de crédito',
+                'installment': 'Mensualidad',
+                'out_prncp': 'Saldo capital pendiente',
+                'last_pymnt_amnt': 'Último pago',
+                'recoveries': 'Monto de cobranza',
+                'int_rate': 'Tasa de interés',
+            }
+            rows = []
+            for k, v in input_data.items():
+                if k in etiquetas:
+                    rows.append({'Concepto': etiquetas[k],
+                                 'Valor': f"${v:,.2f}" if 'inc' in k or 'amnt' in k or 'prncp' in k or 'pymnt' in k or 'recovery' in k else f"{v:.1f}%"})
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     with tab3:
-        # Explicación del modelo (igual que Tkinter)
         st.markdown("""
-        ### 🔍 Explicación del Modelo Random Forest (Igual que Tkinter)
+        ### Cómo toma decisiones el sistema
 
-        **🎯 CARACTERÍSTICAS DEL MODELO:**
-        - **Algoritmo:** Random Forest (Bosque Aleatorio)
-        - **Tipo:** Ensemble de árboles de decisión
-        - **Objetivo:** Clasificación binaria (Aprobado/Rechazado)
+        El sistema usa un modelo de inteligencia artificial llamado **Random Forest**.
 
-        **📊 INTERPRETACIÓN DE RESULTADOS (igual que Tkinter):**
+        **Los factores que más pesan en la decisión son:**
 
-        **1. PROBABILIDAD DE RIESGO:**
-        - **0-20%:** 🟢 RIESGO MÍNIMO - Aprobación automática
-        - **20-40%:** 🟡 RIESGO BAJO - Aprobación estándar
-        - **40-100%:** 🔴 RIESGO ALTO - Rechazo recomendado
+        1. **Historial de cobranza** — Señal de mayor riesgo
+        2. **Saldo pendiente de capital** — Deudas actuales
+        3. **Tasa de interés** — Tasas altas sugieren mayor riesgo percibido
+        4. **Proporción deudas/ingresos (DTI)**
+        5. **Ingresos** — Capacidad real de pago
+        6. **Monto del préstamo** — Montos altos = más riesgo
 
-        **2. FACTORES CLAVE IDENTIFICADOS:**
-        - **Principal pendiente:** Indica cuánto capital sigue debiendo el solicitante
-        - **Relación Deuda/Ingreso (DTI):** Porcentaje del ingreso destinado a pagar deudas
-        - **Tasa de interés:** Tasa aplicada al crédito (mayor tasa = mayor riesgo percibido)
-        - **Utilización de crédito:** Porcentaje del límite de crédito utilizado
-        - **Historial de pagos:** Montos de pagos anteriores y recuperaciones
+        **El umbral de decisión** está en {threshold:.0%}.
+        """.format(threshold=prediction_manager.threshold))
 
-        **⚙️ UMBRAL AJUSTABLE (igual que Tkinter):**
-        - El umbral de decisión puede ajustarse de 0.1 a 0.9
-        - Umbral más bajo = Más aprobaciones (pero más riesgo potencial)
-        - Umbral más alto = Menos aprobaciones (pero menos riesgo)
-        - **Valor por defecto:** 40%
 
-        **⚠️ CONSIDERACIONES IMPORTANTES:**
-        - Este modelo fue entrenado con datos balanceados
-        - Se recomienda validación humana para casos límite
-        - Los resultados deben considerarse como una herramienta de apoyo a la decisión
-        """)
-
+# ---------------------------------------------------------------------------
+# PÁGINA DE HISTORIAL
+# ---------------------------------------------------------------------------
 
 def show_history_page():
-    """Mostrar página de historial"""
-    st.title("📋 Historial de Predicciones")
+    st.title("📋 Mis simulaciones anteriores")
     st.markdown("---")
 
     user = auth_manager.get_current_user()
 
-    # Obtener historial
     with st.spinner("Cargando historial..."):
         predictions = db_manager.get_user_predictions(user['id'], limit=100)
 
     if predictions.empty:
-        st.info("ℹ️ No hay predicciones registradas")
+        st.info("ℹ️ Aún no tienes simulaciones registradas.")
         return
 
-    # Mostrar estadísticas
     col1, col2, col3, col4 = st.columns(4)
-
     with col1:
-        st.metric("Total Predicciones", len(predictions))
-
+        st.metric("Total de simulaciones", len(predictions))
     with col2:
-        approved = len(predictions[predictions['decision'] == 'APROBADO'])
-        st.metric("Aprobados", approved)
-
+        aprobados = len(predictions[predictions['decision'] == 'APROBADO'])
+        st.metric("Con resultado favorable", aprobados)
     with col3:
         avg_risk = predictions['risk_probability'].mean() * 100
-        st.metric("Riesgo Promedio", f"{avg_risk:.1f}%")
-
+        st.metric("Riesgo promedio", f"{avg_risk:.1f}%")
     with col4:
-        latest_date = predictions['created_at'].max()
-        st.metric("Última Predicción", latest_date.strftime("%d/%m/%Y"))
+        ultima = predictions['created_at'].max()
+        st.metric("Última simulación", ultima.strftime("%d/%m/%Y"))
 
     st.markdown("---")
-
-    # Gráfico de evolución
-    st.subheader("📈 Evolución de Predicciones")
+    st.subheader("📈 Evolución de tus simulaciones")
     fig = viz_manager.plot_prediction_history(predictions)
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
+    st.subheader("📋 Detalle")
 
-    # Tabla de historial
-    st.subheader("📋 Detalle de Predicciones")
-
-    # Formatear DataFrame para visualización
     df_display = predictions.copy()
-    df_display['created_at'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d %H:%M')
+    df_display['created_at'] = pd.to_datetime(df_display['created_at']).dt.strftime('%d/%m/%Y %H:%M')
     df_display['risk_probability'] = df_display['risk_probability'].apply(lambda x: f"{x:.1%}")
+    df_display['annual_inc'] = df_display['annual_inc'].apply(lambda x: f"${x:,.0f}")
     df_display['out_prncp'] = df_display['out_prncp'].apply(lambda x: f"${x:,.2f}")
-    df_display['annual_inc'] = df_display['annual_inc'].apply(lambda x: f"${x:,.2f}")
 
-    # Mostrar tabla
-    st.dataframe(
-        df_display[[
-            'created_at', 'decision', 'risk_level', 'risk_probability',
-            'out_prncp', 'dti', 'annual_inc'
-        ]],
-        use_container_width=True,
-        hide_index=True
-    )
+    col_map = {
+        'created_at': 'Fecha',
+        'decision': 'Resultado',
+        'risk_level': 'Nivel de riesgo',
+        'risk_probability': 'Probabilidad',
+        'out_prncp': 'Saldo pendiente',
+        'dti': 'DTI (%)',
+        'annual_inc': 'Ingresos anuales'
+    }
+    df_show = df_display[list(col_map.keys())].rename(columns=col_map)
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
 
-    # Selector para ver detalles de una predicción específica
-    st.markdown("---")
-    st.subheader("🔍 Ver Detalles de Predicción")
 
-    prediction_ids = predictions['id'].tolist()
-    selected_id = st.selectbox(
-        "Seleccione una predicción para ver detalles completos",
-        prediction_ids,
-        format_func=lambda
-            x: f"Predicción ID: {x} - {predictions[predictions['id'] == x]['created_at'].iloc[0].strftime('%Y-%m-%d %H:%M')}"
-    )
-
-    if selected_id:
-        details = db_manager.get_prediction_details(selected_id, user['id'])
-        if details:
-            with st.expander("📋 Detalles completos"):
-                st.json(details)
-
+# ---------------------------------------------------------------------------
+# PÁGINA DE CONFIGURACIÓN
+# ---------------------------------------------------------------------------
 
 def show_configuration_page():
-    """Mostrar página de configuración - VERSIÓN REAL"""
-    st.title("⚙️ Configuración del Sistema")
+    st.title("⚙️ Configuración")
     st.markdown("---")
-
-    # Sección de modelo
-    st.header("🤖 Configuración del Modelo")
-
-    # Umbral de decisión (igual que Tkinter: 0.1 a 0.9)
-    current_threshold = prediction_manager.threshold
-    new_threshold = st.slider(
-        "Umbral de Decisión",
-        min_value=0.1,
-        max_value=0.9,
-        value=float(current_threshold),
-        step=0.05,
-        format="%.2f",
-        help="Probabilidad mínima para clasificar como 'RECHAZADO' (igual que Tkinter)"
-    )
-
-    if new_threshold != current_threshold:
-        prediction_manager.set_threshold(new_threshold)
-        st.success(f"✅ Umbral actualizado a {new_threshold:.1%}")
-
-    st.markdown("---")
-
-    # Configuración de usuario - PERFIL
-    st.header("👤 Configuración de Perfil")
 
     user = auth_manager.get_current_user()
 
-    # Pestañas para Configuración de Usuario
-    profile_tab, password_tab = st.tabs(["📝 Perfil", "🔐 Contraseña"])
+    st.header("🤖 Ajustes del modelo")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        current_threshold = prediction_manager.threshold
+        new_threshold = st.slider(
+            "Umbral de decisión",
+            min_value=0.1, max_value=0.9,
+            value=float(current_threshold),
+            step=0.05, format="%.2f",
+            help="Probabilidad mínima para clasificar como rechazado"
+        )
+        if new_threshold != current_threshold:
+            prediction_manager.set_threshold(new_threshold)
+            st.success(f"✅ Umbral actualizado a {new_threshold:.0%}")
+    with col2:
+        st.metric("Umbral actual", f"{current_threshold:.0%}")
+        if st.button("🔄 Restablecer", use_container_width=True):
+            prediction_manager.set_threshold(0.4)
+            st.success("✅ Restablecido a 40%")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.header("👤 Mi perfil")
+    profile_tab, password_tab = st.tabs(["📝 Datos personales", "🔐 Cambiar contraseña"])
 
     with profile_tab:
         with st.form("user_profile_form"):
-            st.subheader("Información Personal")
-
-            current_name = st.text_input(
-                "Nombre Completo",
-                value=user['full_name'],
-                help="Su nombre completo para identificar su cuenta"
-            )
-
-            current_email = st.text_input(
-                "Email",
-                value=user['email'],
-                disabled=True,
-                help="El email no se puede modificar por seguridad"
-            )
-
-            submitted = st.form_submit_button("💾 Guardar Cambios de Perfil")
-
+            current_name = st.text_input("Nombre completo", value=user['full_name'])
+            st.text_input("Correo electrónico", value=user['email'], disabled=True)
+            submitted = st.form_submit_button("💾 Guardar cambios", use_container_width=True)
             if submitted:
                 if not current_name or len(current_name.strip()) < 3:
                     st.error("❌ El nombre debe tener al menos 3 caracteres")
                 else:
-                    success, message = auth_manager.update_profile(
-                        user['id'],
-                        current_name.strip()
-                    )
+                    success, message = auth_manager.update_profile(user['id'], current_name.strip())
                     if success:
                         st.success(message)
                         st.rerun()
@@ -1412,87 +1378,51 @@ def show_configuration_page():
 
     with password_tab:
         with st.form("change_password_form"):
-            st.subheader("Cambiar Contraseña")
-            st.info("🔒 Para mayor seguridad, la contraseña debe tener al menos 8 caracteres")
+            st.info("🔒 La contraseña debe tener al menos 8 caracteres")
+            current_password = st.text_input("Contraseña actual", type="password")
+            new_password = st.text_input("Nueva contraseña", type="password")
+            confirm_password = st.text_input("Confirmar nueva contraseña", type="password")
 
-            current_password = st.text_input(
-                "Contraseña Actual",
-                type="password",
-                help="Ingrese su contraseña actual para verificar su identidad"
-            )
-
-            new_password = st.text_input(
-                "Nueva Contraseña",
-                type="password",
-                help="La nueva contraseña debe tener al menos 8 caracteres"
-            )
-
-            confirm_password = st.text_input(
-                "Confirmar Nueva Contraseña",
-                type="password",
-                help="Vuelva a ingresar la nueva contraseña"
-            )
-
-            # Indicador de fortaleza de contraseña
             if new_password:
-                strength = 0
-                if len(new_password) >= 8:
-                    strength += 1
-                if any(c.isupper() for c in new_password):
-                    strength += 1
-                if any(c.islower() for c in new_password):
-                    strength += 1
-                if any(c.isdigit() for c in new_password):
-                    strength += 1
-                if any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in new_password):
-                    strength += 1
+                score = sum([
+                    len(new_password) >= 8,
+                    any(c.isupper() for c in new_password),
+                    any(c.islower() for c in new_password),
+                    any(c.isdigit() for c in new_password),
+                    any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in new_password)
+                ])
+                labels = ["", "Muy débil", "Débil", "Moderada", "Buena", "Excelente"]
+                st.progress(score / 5, text=f"Fortaleza: {labels[score]}")
 
-                if strength == 1:
-                    st.warning("🔶 Contraseña débil")
-                elif strength in [2, 3]:
-                    st.info("🔷 Contraseña moderada")
-                elif strength >= 4:
-                    st.success("🔷 Contraseña fuerte")
-
-            submitted_pw = st.form_submit_button("🔐 Cambiar Contraseña")
-
+            submitted_pw = st.form_submit_button("🔐 Cambiar contraseña", use_container_width=True)
             if submitted_pw:
                 if not all([current_password, new_password, confirm_password]):
-                    st.error("❌ Complete todos los campos")
+                    st.error("❌ Completa todos los campos")
                 else:
                     success, message = auth_manager.update_password(
-                        user['id'],
-                        current_password,
-                        new_password,
-                        confirm_password
+                        user['id'], current_password, new_password, confirm_password
                     )
                     if success:
                         st.success(message)
-                        # Limpiar campos
-                        st.session_state.password_changed = True
                         st.rerun()
                     else:
                         st.error(message)
 
     st.markdown("---")
 
-    # Información del sistema
-    st.header("ℹ️ Información del Sistema")
-
+    st.header("ℹ️ Estado del sistema")
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("Base de Datos")
+        st.subheader("Base de datos")
         if db_manager.test_connection():
-            st.success("✅ Conectado")
-            # Mostrar información de conexión básica
-            with st.expander("Ver detalles de conexión"):
-                #st.write(f"**Servidor:** {db_manager.server}")
-                st.write(f"**Servidor (Host):** {db_manager.host}")
+            st.success("✅ Conectada")
+            with st.expander("Ver detalles"):
+                st.write(f"**Servidor:** {db_manager.host}")
                 st.write(f"**Base de datos:** {db_manager.database}")
                 st.write(f"**Usuario:** {db_manager.username}")
         else:
-            st.error("❌ No conectado")
+            st.error("❌ Sin conexión")
 
     with col2:
         st.subheader("Modelo")
@@ -1501,122 +1431,23 @@ def show_configuration_page():
         - **Tipo:** {model_info.get('type', 'N/A')}
         - **Características:** {model_info.get('n_features', 'N/A')}
         - **Estado:** {'✅ Cargado' if prediction_manager.model else '❌ No cargado'}
-        - **Umbral actual:** {prediction_manager.threshold:.1%}
+        - **Umbral:** {prediction_manager.threshold:.0%}
         """)
-
-        # Botón para recargar modelo
-        if st.button("🔄 Recargar Modelo", use_container_width=True):
-            with st.spinner("Recargando modelo..."):
+        if st.button("🔄 Recargar modelo", use_container_width=True):
+            with st.spinner("Recargando..."):
                 if prediction_manager.load_model():
-                    st.success("✅ Modelo recargado exitosamente")
+                    st.success("✅ Modelo recargado")
                     st.rerun()
                 else:
                     st.error("❌ Error al recargar el modelo")
 
-    st.markdown("---")
 
-    # Sección de peligro (operaciones críticas)
-    st.header("⚠️ Zona de Peligro")
+# ---------------------------------------------------------------------------
+# PUNTO DE ENTRADA
+# ---------------------------------------------------------------------------
 
-    with st.expander("Operaciones Avanzadas"):
-        st.warning("⚠️ Estas operaciones son irreversibles")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("🗑️ Limpiar Historial", use_container_width=True):
-                st.warning("Esta funcionalidad aún no está implementada")
-                # Aquí puedes agregar la lógica para limpiar el historial
-
-        with col2:
-            if st.button("📤 Exportar Datos", use_container_width=True):
-                st.warning("Esta funcionalidad aún no está implementada")
-                # Aquí puedes agregar la lógica para exportar datos
-
-        # Información de cuenta
-        st.subheader("Información de Cuenta")
-        st.write(f"**ID de usuario:** {user['id']}")
-        st.write(f"**Fecha de registro:** No disponible")  # Puedes agregar este campo a la BD
-
-        # Botón para eliminar cuenta (con confirmación)
-        delete_confirmed = st.checkbox("Entiendo que esta acción es irreversible")
-
-        if st.button("🗑️ Eliminar Mi Cuenta",
-                     disabled=not delete_confirmed,
-                     type="secondary",
-                     use_container_width=True):
-            st.error("❌ Esta funcionalidad aún no está implementada")
-            # Aquí puedes agregar la lógica para eliminar la cuenta
-
-    # Puedes agregar esto en la sección de cambiar contraseña
-    def check_password_strength(password):
-        """Verificar fortaleza de la contraseña"""
-        if not password:
-            return 0, "Ingrese una contraseña"
-
-        score = 0
-        messages = []
-
-        # Longitud
-        if len(password) >= 8:
-            score += 1
-        else:
-            messages.append("❌ Al menos 8 caracteres")
-
-        # Mayúsculas
-        if any(c.isupper() for c in password):
-            score += 1
-        else:
-            messages.append("❌ Al menos una mayúscula")
-
-        # Minúsculas
-        if any(c.islower() for c in password):
-            score += 1
-        else:
-            messages.append("❌ Al menos una minúscula")
-
-        # Números
-        if any(c.isdigit() for c in password):
-            score += 1
-        else:
-            messages.append("❌ Al menos un número")
-
-        # Caracteres especiales
-        if any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password):
-            score += 1
-        else:
-            messages.append("❌ Al menos un carácter especial")
-
-        return score, messages
-
-    # Luego en la interfaz:
-    if new_password:
-        score, messages = check_password_strength(new_password)
-
-        progress_bar = st.progress(score / 5)
-
-        if score == 0:
-            st.error("Contraseña muy débil")
-        elif score <= 2:
-            st.warning("Contraseña débil")
-        elif score <= 4:
-            st.info("Contraseña buena")
-        else:
-            st.success("Contraseña excelente")
-
-        for msg in messages:
-            st.caption(msg)
-
-
-
-# Punto de entrada principal
 def main():
-    """Función principal de la aplicación"""
-
-    # Inicializar session_state primero
     initialize_session_state()
-
-    # Verificar autenticación
     if not auth_manager.is_authenticated():
         show_login_page()
     else:
